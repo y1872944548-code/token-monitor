@@ -4,7 +4,7 @@
 
 新增 Claude Code 本机 JSONL 与 Antigravity 实验性 SQLite 适配，覆盖重复报告、缓存计数、局部/全局范围、设置恢复、未知格式、SQLite 只读和客户端隔离。新增集成测试实际启动当前 MCP 和原生窗口所使用的 Node feed，使用合成文件验证更新、范围切换和父进程关闭后的退出。
 
-Node 回归共 37 项；Linux 上 35 通过、0 失败，Windows 路径与 Windows 启动测试两项按平台跳过；Windows 上仅跳过需要 Unix 符号链接的路径检查。Windows 启动测试实际编译测试宿主，调用安装后的启动脚本，验证 Claude / Antigravity 两个独立监控进程、用量/未知状态、最小化、恢复和重复打开；不会控制真实客户端或触发模型。PowerShell 三个脚本语法检查通过。以上测试不代表真实安装的 Claude Code / Antigravity 端到端验收，具体数据格式边界见 [CLIENTS.md](CLIENTS.md)。
+Node 回归共 37 项；Linux 上 35 通过、0 失败，Windows 路径与 Windows 启动测试两项按平台跳过；Windows CI 中仅跳过需要 Unix 符号链接的路径检查。Windows 启动测试实际编译测试宿主，调用私有源码副本中的启动脚本，验证 Claude / Antigravity 两个独立监控进程、用量/未知状态、最小化、恢复和重复打开；不会控制真实客户端或触发模型。该可见窗口测试在本机默认跳过，由 CI 显式开启；即使主动在本机开启，也不会复用实际安装的监控可执行文件路径。PowerShell 三个脚本语法检查通过。以上测试不代表真实安装的 Claude Code / Antigravity 端到端验收，具体数据格式边界见 [CLIENTS.md](CLIENTS.md)。
 
 提交 `4b88bcd` 的 [Checks](https://github.com/y1872944548-code/token-/actions/runs/38805595693) 已完成，Linux / Windows 两个作业均成功，包括 Windows 的新增启动链路测试及 `test:native` 原生检查。过程中修复了测试数据库句柄清理顺序，以及原有 Codex 全局增量读取对文件修改时间精度的依赖；后者有固定旧文件时间的回归覆盖。
 

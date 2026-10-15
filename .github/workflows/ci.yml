@@ -17,6 +17,8 @@ jobs:
       - run: npm ci
       - name: Node tests
         run: node scripts/ci-test.mjs
+        env:
+          CODEX_PULSE_RUN_NATIVE_STARTUP_TESTS: '1'
       - run: npm run configure:mcp
       - run: npm run check:mcp
       - if: runner.os == 'Windows'

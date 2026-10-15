@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, appendFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, appendFile, cp } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,9 +9,12 @@ import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 const exec = promisify(execFile);
 
-test('Windows launch script starts isolated Claude/Antigravity monitors and follows a test host minimize/restore', { skip: process.platform !== 'win32', timeout: 90000 }, async t => {
+test('Windows launch script starts isolated Claude/Antigravity monitors and follows a test host minimize/restore', { skip: process.platform !== 'win32' || process.env.CODEX_PULSE_RUN_NATIVE_STARTUP_TESTS !== '1', timeout: 90000 }, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'pulse-windows-startup-'));
-  const project = fileURLToPath(new URL('../', import.meta.url)), hosts = [], monitors = [];
+  const sourceProject = fileURLToPath(new URL('../', import.meta.url)), project = path.join(root, 'app'), hosts = [], monitors = [];
+  // The launcher owns processes by executable path. Use a private copy so even
+  // an explicitly enabled local test can never stop the user's real monitors.
+  for (const directory of ['src', 'native', 'scripts']) await cp(path.join(sourceProject, directory), path.join(project, directory), { recursive: true });
   const compiler = path.join(process.env.WINDIR, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
   const source = path.join(root, 'Host.cs');
   await writeFile(source, `using System;using System.IO;using System.Windows.Forms;
@@ -24,7 +27,7 @@ timer.Start();Application.Run(form);}}}`);
   t.after(async () => {
     for (const monitor of monitors) try { await exec('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cleanup, '-MonitorPid', String(monitor.pid), '-ExpectedExe', monitor.exe], { windowsHide: true }); } catch {}
     for (const host of hosts) if (host.exitCode === null) host.kill();
-    await delay(300); await rm(root, { recursive: true, force: true });
+    await delay(300); await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const wait = async predicate => { const end = Date.now() + 15000; while (!(await predicate())) { assert.ok(Date.now() < end, 'native startup state timed out'); await delay(100); } };
   const state = async data => { try { return JSON.parse(await readFile(path.join(data, 'float-status.json'), 'utf8')); } catch { return null; } };
