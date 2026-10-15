@@ -1,0 +1,21 @@
+{
+  "name": "codex-pulse",
+  "version": "0.8.1",
+  "description": "本机原生浮条，查看官方上报 Token、TPS 和实时可见文字速度。",
+  "interface": {
+    "displayName": "Codex 监控浮条",
+    "shortDescription": "查看 Token、TPS 和滚动曲线",
+    "longDescription": "可拖动、缩放的本机监控浮条；支持指定对话或本机全局范围，官方 TPS 上报均速与实时字/秒可切换。最小化同步隐藏。",
+    "developerName": "本机自用",
+    "category": "Productivity",
+    "brandColor": "#17634F",
+    "composerIcon": "./assets/pulse.svg",
+    "logo": "./assets/pulse.svg",
+    "defaultPrompt": [
+      "打开 Codex 监控浮条，沿用我上次的设置。"
+    ],
+    "brandColorDark": "#91EFCA"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}

@@ -1,0 +1,24 @@
+{
+  "name": "codex-pulse",
+  "version": "0.8.1",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "repository": { "type": "git", "url": "https://github.com/y1872944548-code/token-.git" },
+  "scripts": {
+    "start": "node src/float-mcp.mjs",
+    "diagnostic:web": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "mcp": "node src/float-mcp.mjs",
+    "configure:mcp": "node scripts/configure-mcp.mjs",
+    "check:mcp": "node scripts/check-mcp.mjs",
+    "test:native": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check-native.ps1",
+    "setup:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-windows.ps1",
+    "start:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start-float.ps1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "gsap": "^3.13.0",
+    "zod": "^4.6.7"
+  }
+}

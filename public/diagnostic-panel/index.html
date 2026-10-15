@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Codex Pulse · 运行监控</title><link rel="stylesheet" href="/style.css"><script defer src="/gsap.js"></script><script defer src="/app.js"></script></head>
+<body>
+<main>
+  <header><div class="brand"><span class="mark">↗</span><div><span class="eyebrow">CODEX / LOCAL TELEMETRY</span><h1>运行，尽在眼前。</h1></div></div><div class="connection"><span id="light"></span><span id="connection">连接中</span></div></header>
+  <section class="toolbar"><label>监控聊天<select id="session" aria-label="选择监控聊天"></select></label><label>时间范围<select id="range"><option value="120">近 2 分钟</option><option value="600" selected>近 10 分钟</option><option value="3600">近 1 小时</option></select></label><button id="pause">暂停画面</button><button id="compact">小窗模式</button></section>
+  <div class="meta"><span id="model">模型未知</span><span id="activity">等待观测</span><span id="age">—</span></div>
+  <section class="cards"><article><span>累计 Token</span><strong id="total">—</strong><small>输入 + 输出 · 当前聊天</small></article><article><span>区间输出速度</span><strong><b id="rate">—</b><em> tok/s</em></strong><small id="interval">等待两个有效观测点</small></article><article><span>输出 Token</span><strong id="output">—</strong><small>包含推理 Token</small></article></section>
+  <section class="chart-card"><div class="chart-heading"><div><span class="eyebrow">01 / CONSUMPTION</span><h2>用量轨迹</h2></div><label class="metric-label"><select id="metric" aria-label="用量指标"><option value="total_tokens">累计总量</option><option value="input_tokens">输入 Token</option><option value="cached_input_tokens">缓存输入</option><option value="output_tokens">输出 Token</option></select></label></div><div class="plot" id="usagePlot"><svg id="usageChart" viewBox="0 0 900 225" role="img" aria-label="Token 用量折线图"></svg><p class="empty" id="usageEmpty">等待真实用量数据</p></div></section>
+  <section class="chart-card"><div class="chart-heading"><div><span class="eyebrow">02 / OBSERVED PACE</span><h2>速度轨迹</h2></div><span class="chart-note">观测间隔平均 · 包含工具与等待时间</span></div><div class="plot"><svg id="rateChart" viewBox="0 0 900 225" role="img" aria-label="区间输出速度折线图"></svg><p class="empty" id="rateEmpty">还需要下一个用量记录</p></div></section>
+  <section class="breakdown"><div><span>输入</span><b id="input">—</b></div><div><span>其中缓存</span><b id="cached">—</b></div><div><span>其中推理输出</span><b id="reasoning">—</b></div></section>
+  <section class="quota"><div class="quota-heading"><h2>账户额度</h2><span id="quotaAge">账户共享 · 以最近记录为准</span></div><div id="quotaRows"></div></section>
+  <footer><p id="notice">亮点跟随最新真实观测。日志按事件更新，面板每秒检查；缺失数据不填零。Token 不等于人民币费用。</p><button id="stop">关闭监控服务</button></footer>
+  <p id="error" role="status"></p>
+</main>
+</body></html>

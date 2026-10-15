@@ -1,0 +1,5 @@
+{
+  "name": "codex-pulse-local",
+  "interface": { "displayName": "Codex 本机监控" },
+  "plugins": [{ "name": "codex-pulse", "source": { "source": "local", "path": "./" }, "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" }, "category": "Productivity" }]
+}

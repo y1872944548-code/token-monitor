@@ -1,0 +1,12 @@
+node_modules/
+runtime/
+.mcp.json
+.env
+.env.*
+!.env.example
+QA/
+记忆日志.md
+dist/
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,7 @@
+interface:
+  display_name: "打开监控浮条"
+  short_description: "快速打开Codex的Token与TPS监控浮条，沿用上次范围、位置和大小"
+  icon_small: "./assets/pulse.svg"
+  icon_large: "./assets/pulse.svg"
+  brand_color: "#17634F"
+  default_prompt: "使用 $codex-pulse 打开监控浮条，沿用我上次的监控范围、大小和位置。"
