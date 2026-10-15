@@ -34,7 +34,11 @@ static class PulseNativeTests {
     panel.UpdateHost(true,12);Check(panel.LauncherVisible&&!panel.PanelVisible,"opening Codex initially presents a launcher without expanding the panel");
     using(PulseLaunchButton button=new PulseLaunchButton()){
       button.Sync(new Rectangle(0,0,1920,1080),144,false,false);button.ToggleRequested+=delegate {panel.Toggle();button.SetExpanded(panel.Expanded);};
-      IntPtr window=button.Handle;IntPtr point=new IntPtr((15<<16)|45);
+      IntPtr window=button.Handle;
+      // The runner's screen can force the initial button into its narrow tab.
+      // Click inside the actual control in either layout, not a fixed full-button coordinate.
+      int clickX=button.ClientSize.Width/2,clickY=button.ClientSize.Height/2;
+      IntPtr point=new IntPtr((clickY<<16)|clickX);
       SendMessage(window,0x0201,new IntPtr(1),point);SendMessage(window,0x0202,IntPtr.Zero,point);
       Check(panel.PanelVisible,"one native launcher click must expand the panel without MCP or model calls");
       panel.HidePanel();Check(panel.LauncherVisible&&!panel.PanelVisible,"closing the panel keeps the launcher");
@@ -42,7 +46,7 @@ static class PulseNativeTests {
       using(Bitmap image=new Bitmap(button.Width,button.Height)){button.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));image.Save(Path.Combine(output,"launcher-button.png"),ImageFormat.Png);}
       Check(!FloatingPulse.IsNativeTopMost(window),"launcher must remain in the normal window band");
       int changes=0;button.DockPositionChanged+=delegate {changes++;};double before=button.Offset;
-      SendMessage(window,0x0201,new IntPtr(1),point);SendMessage(window,0x0200,new IntPtr(1),new IntPtr((80<<16)|45));SendMessage(window,0x0202,IntPtr.Zero,point);
+      SendMessage(window,0x0201,new IntPtr(1),point);SendMessage(window,0x0200,new IntPtr(1),new IntPtr(((clickY+65)<<16)|clickX));SendMessage(window,0x0202,IntPtr.Zero,point);
       Check(changes==1&&button.Offset!=before&&panel.PanelVisible,"dragging changes remembered docking height without toggling the panel");
       Rectangle screen=Screen.PrimaryScreen.WorkingArea;button.Sync(screen,144,false,true);
       Check(button.Stowed&&button.Width==18,"maximized host stows launcher to a 12 logical pixel edge tab");
