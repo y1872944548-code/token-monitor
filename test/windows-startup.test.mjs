@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, appendFile, cp } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, appendFile, cp, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 const exec = promisify(execFile);
 
 test('Windows launch script starts isolated Claude/Antigravity monitors and follows a test host minimize/restore', { skip: process.platform !== 'win32' || process.env.CODEX_PULSE_RUN_NATIVE_STARTUP_TESTS !== '1', timeout: 90000 }, async t => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'pulse-windows-startup-'));
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pulse-windows-startup-')));
   const sourceProject = fileURLToPath(new URL('../', import.meta.url)), project = path.join(root, 'app'), hosts = [], monitors = [];
   // The launcher owns processes by executable path. Use a private copy so even
   // an explicitly enabled local test can never stop the user's real monitors.
@@ -23,7 +23,7 @@ form.Text="Pulse CI test host";form.Width=900;form.Height=650;form.Shown+=delega
 string previous="";timer.Interval=100;timer.Tick+=delegate{try{string command=File.Exists(args[0])?File.ReadAllText(args[0]):"";if(command==previous)return;previous=command;if(command=="minimize")form.WindowState=FormWindowState.Minimized;else if(command=="restore"){form.WindowState=FormWindowState.Normal;form.Show();}else if(command=="exit")form.Close();}catch{}};
 timer.Start();Application.Run(form);}}}`);
   const cleanup = path.join(root, 'cleanup.ps1');
-  await writeFile(cleanup, 'param([int]$MonitorPid,[string]$ExpectedExe)\n$p=Get-Process -Id $MonitorPid -ErrorAction SilentlyContinue\nif($p -and $p.Path -eq $ExpectedExe){Stop-Process -Id $MonitorPid}\n');
+  await writeFile(cleanup, 'param([int]$MonitorPid,[string]$ExpectedExe)\n$p=Get-Process -Id $MonitorPid -ErrorAction SilentlyContinue\nif($p -and $p.Path -eq $ExpectedExe){& taskkill.exe /PID $MonitorPid /T /F | Out-Null}\n');
   t.after(async () => {
     for (const monitor of monitors) try { await exec('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cleanup, '-MonitorPid', String(monitor.pid), '-ExpectedExe', monitor.exe], { windowsHide: true }); } catch {}
     for (const host of hosts) if (host.exitCode === null) host.kill();
