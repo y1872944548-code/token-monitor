@@ -4,7 +4,7 @@
 
 新增 Claude Code 本机 JSONL 与 Antigravity 实验性 SQLite 适配，覆盖重复报告、缓存计数、局部/全局范围、设置恢复、未知格式、SQLite 只读和客户端隔离。新增集成测试实际启动当前 MCP 和原生窗口所使用的 Node feed，使用合成文件验证更新、范围切换和父进程关闭后的退出。
 
-当前 Linux 本地回归共 35 项：34 通过、0 失败、1 项 Windows 路径检查跳过。PowerShell 三个脚本语法检查通过。Windows 作业还包含更新后的客户端窗口路径、数据目录与单例隔离检查；以上测试不代表真实安装的 Claude Code / Antigravity 端到端验收，具体数据格式边界见 [CLIENTS.md](CLIENTS.md)。
+Node 回归共 36 项；Linux 上包含 Windows 路径与 Windows 启动测试两项平台跳过，Windows 上仅跳过需要 Unix 符号链接的路径检查。Windows 启动测试实际编译测试宿主，调用安装后的启动脚本，验证 Claude / Antigravity 两个独立监控进程、用量/未知状态、最小化、恢复和重复打开；不会控制真实客户端或触发模型。PowerShell 三个脚本语法检查通过。以上测试不代表真实安装的 Claude Code / Antigravity 端到端验收，具体数据格式边界见 [CLIENTS.md](CLIENTS.md)。
 
 ## 0.8.1 初次源码整理
 

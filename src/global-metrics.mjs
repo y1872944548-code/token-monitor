@@ -21,7 +21,17 @@ export class GlobalMetrics {
   parse(buffer,id){let oldest=Infinity;for(const line of buffer.toString('utf8').split('\n')){if(!line.includes('"token_usage_record"')&&!line.includes('"event_msg"'))continue;try{const record=JSON.parse(line);if(!['event_msg','token_usage_record'].includes(record.type))continue;const time=Date.parse(record.timestamp);if(Number.isFinite(time))oldest=Math.min(oldest,time);this.accept(record,id);}catch{}}return oldest;}
   async read(entry,roots){let handle;try{
     if(!this.files.has(entry.id)&&this.checked.get(entry.id)===entry.modifiedAt&&(!this.failures.has(entry.id)||Date.now()-this.failures.get(entry.id)<5000)){if(this.failures.has(entry.id))this.readErrors++;return;}
-    const file=await insideRoots(entry.file,roots);const info=await stat(file);if(info.mtimeMs<this.since&&!this.files.has(entry.id))return;
+    const file=await insideRoots(entry.file,roots);const info=await stat(file);
+    if(info.mtimeMs<this.since&&!this.files.has(entry.id)){
+      // Keep an offset for older files too. Filesystem timestamps can lag the
+      // wall clock; a later append must not be skipped just because mtime still
+      // falls before the monitoring epoch. Preserve a bounded partial line.
+      handle=await open(file,'r');const length=Math.min(info.size,65536),tail=Buffer.alloc(length);await handle.read(tail,0,length,info.size-length);
+      const last=tail.lastIndexOf(10),discard=last<0&&info.size>length;
+      this.files.set(entry.id,{file,position:info.size,back:0,carry:Buffer.alloc(0),pending:discard?Buffer.alloc(0):Buffer.from(tail.subarray(last+1)),initial:false,discard});
+      if(discard)this.missing++;
+      return;
+    }
     let state=this.files.get(entry.id);if(!state){state={file,position:info.size,back:info.size,carry:Buffer.alloc(0),pending:Buffer.alloc(0),initial:true};this.files.set(entry.id,state);}
     if(state.file!==file||info.size<state.position){this.files.delete(entry.id);return this.read(entry,roots);}
     handle=await open(file,'r');
@@ -29,7 +39,7 @@ export class GlobalMetrics {
       if(state.initial){const last=joined.lastIndexOf(10);state.pending=joined.subarray(last+1);joined=joined.subarray(0,last+1);state.initial=false;}
       const first=joined.indexOf(10);const ready=start>0?(first>=0?joined.subarray(first+1):Buffer.alloc(0)):joined;
       state.carry=start>0?(first>=0?joined.subarray(0,first+1):joined):Buffer.alloc(0);if(state.carry.length>BLOCK)state.carry=Buffer.alloc(0);const oldest=this.parse(ready,entry.id);state.back=oldest<this.since?0:start;if(state.back===0)state.carry=Buffer.alloc(0);
-    }else if(info.size>state.position){const size=Math.min(BLOCK,info.size-state.position),data=Buffer.alloc(size);const {bytesRead}=await handle.read(data,0,size,state.position);state.position+=bytesRead;const joined=Buffer.concat([state.pending,data.subarray(0,bytesRead)]),last=joined.lastIndexOf(10);if(last>=0){this.parse(joined.subarray(0,last),entry.id);state.pending=joined.subarray(last+1);}else state.pending=joined;}
+    }else if(info.size>state.position){const size=Math.min(BLOCK,info.size-state.position),data=Buffer.alloc(size);const {bytesRead}=await handle.read(data,0,size,state.position);state.position+=bytesRead;const joined=Buffer.concat([state.pending,data.subarray(0,bytesRead)]),last=joined.lastIndexOf(10);if(last>=0){let ready=joined.subarray(0,last);if(state.discard){const first=ready.indexOf(10);ready=first<0?Buffer.alloc(0):ready.subarray(first+1);state.discard=false;}this.parse(ready,entry.id);state.pending=Buffer.from(joined.subarray(last+1));}else state.pending=joined;}
     state.remaining=info.size-state.position;this.failures.delete(entry.id);
   }catch{if(entry.modifiedAt>=this.since||this.files.has(entry.id)){this.readErrors++;this.failures.set(entry.id,Date.now());}}finally{this.checked.set(entry.id,entry.modifiedAt);await handle?.close();}}
   async tick(entries,roots){this.readErrors=0;for(let i=0;i<entries.length;i+=4)await Promise.all(entries.slice(i,i+4).map(entry=>this.read(entry,roots)));this.loading=[...this.files.values()].filter(state=>state.back>0||state.remaining>0).length;}

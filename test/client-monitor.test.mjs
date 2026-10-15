@@ -73,7 +73,8 @@ test('Antigravity metadata uses aggregate output, excludes model IDs and rejects
 
 test('Antigravity SQLite reader handles new generations and copies without modifying the source database', async t => {
   const home = await fixture(t), dbFile = path.join(home, a + '.db');
-  const db = new DatabaseSync(dbFile); t.after(() => db.close());
+  const db = new DatabaseSync(dbFile);
+  try {
   db.exec('CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB)'); db.prepare('INSERT INTO gen_metadata VALUES (?, ?)').run(1, metadata());
   const before = await readFile(dbFile);
   const monitor = new ClientMonitor({ client: 'antigravity', home, threadId: a, now: () => time + 1000 }); await monitor.initialize(); await monitor.tick();
@@ -84,6 +85,7 @@ test('Antigravity SQLite reader handles new generations and copies without modif
   assert.equal(monitor.snapshot().usage.total_tokens, 360);
   db.prepare('INSERT INTO gen_metadata VALUES (?, ?)').run(4, metadata({ stamp: false, response: 'unsupported' })); await monitor.tick();
   assert.equal(monitor.snapshot().scope.coverage, 'partial'); assert.equal(monitor.snapshot().usage.total_tokens, 360);
+  } finally { db.close(); }
 });
 
 test('empty or unsupported Antigravity history remains unavailable instead of fabricated zero usage', async t => {

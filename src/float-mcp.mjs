@@ -31,7 +31,7 @@ server.registerTool('pulse_open', {
     if (hostPid) args.push('-HostPid', String(hostPid));
     if (launchId) args.push('-ThreadId', launchId);
     await exec('powershell.exe', args, { windowsHide: true, timeout: 30000 });
-    return result(await sample(launchId, client));
+    return result(await sample(undefined, client));
   } catch(error) { return { isError: true, content: [{ type: 'text', text: `浮条启动失败：${error.message}` }] }; }
 });
 server.registerTool('pulse_snapshot', { description: '读取指定客户端的浮条与日志摘要，不循环调用模型。', inputSchema: { threadId: z.string().uuid().optional(), client: z.enum(['codex','claude-code','antigravity']).default('codex') }, outputSchema: schema,

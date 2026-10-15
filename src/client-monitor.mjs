@@ -176,7 +176,7 @@ export class ClientMonitor {
     const usage = known ? Object.fromEntries(keys.map(k => [k, k === 'reasoning_output_tokens' ? null : rows.reduce((sum, x) => sum + (x.usage[k] ?? 0), 0)])) : null;
     if (usage && keys.some(k => usage[k] !== null && !Number.isSafeInteger(usage[k]))) { partial = true; for (const k of keys) usage[k] = null; }
     const observedAt = rows.length ? Math.max(...rows.map(x => x.time)) : null;
-    const latestRate = known ? rows.filter(x => x.time > now - 120000).reduce((sum, x) => sum + x.usage.output_tokens, 0) / 120 : null;
+    const latestRate = known && usage?.total_tokens !== null ? rows.filter(x => x.time > now - 120000).reduce((sum, x) => sum + x.usage.output_tokens, 0) / 120 : null;
     if (latestRate !== null && (!this.points.length || now - this.points.at(-1).time >= 500)) { this.points.push({ time: now, rate: latestRate }); if (this.points.length > 250) this.points.shift(); }
     const error = !this.catalog.entries.length ? this.unsupportedFiles ? '当前记录格式未支持' : '等待本机会话' : !known ? '尚无兼容用量' : partial ? '用量不完整' : null;
     return { kind: 'codex-pulse', version: '0.9.0', client: this.client, clientLabel: CLIENTS[this.client], now,

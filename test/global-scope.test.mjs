@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,mkdir,writeFile,appendFile,rm,readFile}from'node:fs/promises';import path from'node:path';import os from'node:os';
+import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,mkdir,writeFile,appendFile,rm,readFile,utimes}from'node:fs/promises';import path from'node:path';import os from'node:os';
 import {GlobalMetrics}from'../src/global-metrics.mjs';import {ScopeEngine}from'../src/scope-engine.mjs';
 import {standardPath}from'../src/thread-catalog.mjs';
 const a='01a13949-b780-71a2-8863-a7f53db88ead',b='01a13b47-583a-7e01-884c-e76fb039ff14';
@@ -9,6 +9,15 @@ test('global request totals deduplicate fork/replay and do not add inherited cum
  assert.equal(m.snapshot(1300).usage.total_tokens,300);assert.equal(m.snapshot(1300).contributingThreads,2);
  m.accept({timestamp:new Date(1250).toISOString(),type:'event_msg',payload:{rate_limits:{primary:{used_percent:40}}}},a);assert.equal(m.snapshot(1300).limits.primary.usedPercent,40);
  m.acceptText({id:'visible',from:0,to:4,time:1200});m.acceptText({id:'visible',from:0,to:4,time:1201});m.acceptText({id:'visible',from:2,to:6,time:1202});m.acceptText({id:'other',from:0,to:2,time:1203});assert.equal(m.snapshot(1300).characters,8);assert.equal(m.snapshot(1300).rate,4);
+});
+test('global appends survive coarse pre-epoch file timestamps and a partial first report',async t=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'pulse-mtime-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const since=Date.now(),file=path.join(root,`rollout-${a}.jsonl`),next=JSON.stringify(record(since+1,a,'new',120,12));
+ await writeFile(file,JSON.stringify(record(since-10000,a,'old',99,9))+'\n'+next.slice(0,50));
+ const before=new Date(since-5000);await utimes(file,before,before);
+ const entry={id:a,file,modifiedAt:since-5000},metrics=new GlobalMetrics(since);await metrics.tick([entry],[root]);
+ await appendFile(file,next.slice(50)+'\n');await utimes(file,before,before);await metrics.tick([entry],[root]);
+ assert.equal(metrics.snapshot(since+100).usage.total_tokens,120);
 });
 test('global incremental scan survives partial lines; settings switch and resume retain the chosen global epoch',async t=>{
  const home=await mkdtemp(path.join(os.tmpdir(),'pulse-scope-'));assert.ok(path.resolve(home).startsWith(path.resolve(os.tmpdir())+path.sep));t.after(()=>rm(home,{recursive:true,force:true}));const root=path.join(home,'sessions');await mkdir(root);

@@ -15,7 +15,8 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: npm test
+      - name: Node tests
+        run: node scripts/ci-test.mjs
       - run: npm run configure:mcp
       - run: npm run check:mcp
       - if: runner.os == 'Windows'
