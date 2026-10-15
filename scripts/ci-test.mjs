@@ -12,6 +12,10 @@ if (code && process.env.GITHUB_STEP_SUMMARY) {
   const xml = await readFile(report, 'utf8').catch(() => 'Test runner ended before producing its report.');
   const failures = [...xml.matchAll(/<testcase\b[\s\S]*?<\/testcase>/g)].map(match => match[0]).filter(value => /<(?:failure|error)\b/.test(value));
   const detail = (failures.join('\n') || xml).slice(0, 48000).replace(/`/g, "'");
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    const annotation = detail.slice(0, 12000).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+    console.log('::error title=Node test failure details::' + annotation);
+  }
   await appendFile(process.env.GITHUB_STEP_SUMMARY, '\n### Node test failures\n\n```xml\n' + detail + '\n```\n');
 }
 process.exitCode = code;
