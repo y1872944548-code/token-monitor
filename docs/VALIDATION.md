@@ -14,6 +14,12 @@
 | PowerShell 语法 | 3 个脚本由 PowerShell 7.5.0 AST 解析通过；工具包用官方 SHA-256 校验，不代表 Windows PowerShell 5.1 执行通过 |
 | 源码包复现 | 从排除本机数据的 ZIP 解压到新目录，重新 `npm ci`、运行测试、生成配置并检查 MCP；未使用原目录的 node_modules |
 
-Windows 原生编译、真实 Codex 窗口交互、真实 `codex-ipc` 接入以及 GitHub Actions 云端作业尚未在本轮运行。仓库自带的历史本机验证记录不能代替修改后的 Windows 验收。
+## GitHub Actions 后续验证
+
+源码已推送到 `main`。提交 `58c5035` 的 [Checks #3](https://github.com/y1872944548-code/token-/actions/runs/38796616085) 已完成，Linux 与 Windows 两个作业均成功。Windows 作业包含 Node 测试、当前配置的 MCP 检查，以及 `npm run test:native` 的原生编译和测试窗口检查。
+
+首次 Windows 原生测试失败的原因是测试点击坐标假定按钮始终完整展开；CI 屏幕将按钮收为窄标签后，固定坐标落在了控件外。测试现改为点击当前控件区域，保留点击展开、关闭后重开与拖动不误触等断言；失败详情会输出为 Actions 注释。旧的失败记录保留，以上链接为修复后的成功检查。
+
+真实 Codex 窗口联动与真实 `codex-ipc` 接入仍未在本轮验证。自动检查使用自己的测试窗口与合成事件，不代表用户桌面的端到端验收；仓库自带的历史本机记录也不能代替修改后的真实桌面验证。
 
 已添加 Windows CI 和本机 `npm run setup:windows` / `npm run test:native` 命令。真实交互仍需在 Windows 上检查按钮、范围切换、最小化和速度曲线。未创建 Windows 安装包或 Release。
