@@ -19,6 +19,12 @@ sealed class FloatingPulse : Form {
   [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int GetWindowText(IntPtr window,System.Text.StringBuilder text,int size);
+  [DllImport("kernel32.dll",SetLastError=true)]static extern IntPtr CreateToolhelp32Snapshot(uint flags,uint pid);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode)]static extern bool Process32First(IntPtr snapshot,ref ProcessEntry entry);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode)]static extern bool Process32Next(IntPtr snapshot,ref ProcessEntry entry);
+  [DllImport("kernel32.dll")]static extern bool CloseHandle(IntPtr handle);
+  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]struct ProcessEntry {public uint Size,Usage,Pid;public IntPtr Heap;public uint Module,Threads,Parent;public int Priority;public uint Flags;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)]public string Name;}
   delegate bool WindowVisitor(IntPtr h, IntPtr data);
   [DllImport("user32.dll")] static extern bool EnumWindows(WindowVisitor callback, IntPtr data);
   [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint command);
@@ -31,7 +37,7 @@ sealed class FloatingPulse : Form {
   [DllImport("user32.dll", EntryPoint="GetWindowLongW")] static extern int GetStyle32(IntPtr h, int n);
   [DllImport("user32.dll",SetLastError=true)] static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int width,int height,uint flags);
   [StructLayout(LayoutKind.Sequential)] struct Rect { public int Left, Top, Right, Bottom; }
-  readonly string root, thread, data; readonly System.Threading.EventWaitHandle showRequest; readonly JavaScriptSerializer json = new JavaScriptSerializer();
+  readonly string root, thread, data, client, clientLabel; readonly uint pinnedHost; readonly System.Threading.EventWaitHandle showRequest; readonly JavaScriptSerializer json = new JavaScriptSerializer();
   readonly Timer tick = new Timer(); System.Threading.Timer animator, presenceTimer; readonly ToolTip tip = new ToolTip();
   readonly object gate = new object(); readonly Stopwatch clock = Stopwatch.StartNew();
   Process feed; Dictionary<string,object> pending, state, view; volatile bool closing; bool fastTimer; int frameQueued, scanBusy; string feedFailure;
@@ -40,13 +46,15 @@ sealed class FloatingPulse : Form {
   double lastSave=-20, lastPreview=-20, lastDiscovery=-30, dotX, dotY=82, smoothScale=1, dpi=1, zoom=1, fps, fpsSince, scanMs; int painted, animationPeriod=100;string hostProbe="",lastGraphMetric="";
   double Unit { get { return dpi*zoom; } }
   Dictionary<uint,string> ownerProcesses=new Dictionary<uint,string>(); List<double[]> curve=new List<double[]>();
+  HashSet<uint> claudeParents=new HashSet<uint>();
   IntPtr owner = IntPtr.Zero; string ownerName = ""; Rect ownerRect;
   bool paused, dragged, resizing, settingsHovered, motion=true, codexVisible, hostReady, feedSuspended, layerAligned, launcherAligned; uint hostPid; HostState pendingHost;
   readonly PulsePanelState panel;readonly PulseLaunchButton launcher;
   static readonly Rectangle SettingsBounds=new Rectangle(478,8,70,34);
   string speedMetric="reported-tps";
   Point dragMouse, dragLocation; Size dragSize;
-  const string RunKey="Software\\Microsoft\\Windows\\CurrentVersion\\Run", RunName="CodexPulseCompanion";
+  const string RunKey="Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+  string RunName {get{return client=="codex"?"CodexPulseCompanion":"CodexPulseCompanion-"+client;}}
   sealed class HostState { public IntPtr Handle; public uint Pid; public bool Visible; public Rect Bounds; public double ScanMs; public string Probe; }
   string error = "连接中";
   static readonly Color bg = Color.FromArgb(23,35,38), mint = Color.FromArgb(152,239,189), muted = Color.FromArgb(174,194,194);
@@ -55,12 +63,13 @@ sealed class FloatingPulse : Form {
   protected override void SetVisibleCore(bool value) { base.SetVisibleCore(value && codexVisible); }
   protected override CreateParams CreateParams { get { CreateParams p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x80; return p; } }
   public FloatingPulse(string projectRoot, string node, string threadId,bool showOnStart=false) {
-    data=Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(projectRoot,"runtime");Directory.CreateDirectory(data);
+    client=Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT")??"codex";clientLabel=ClientLabel(client);UInt32.TryParse(Environment.GetEnvironmentVariable("CODEX_PULSE_HOST_PID"),out pinnedHost);
+    data=Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT_DATA_DIR")??Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(projectRoot,"runtime");Directory.CreateDirectory(data);
     showRequest=new System.Threading.EventWaitHandle(false,System.Threading.EventResetMode.AutoReset,InstanceName(data)+"-show");
     panel=new PulsePanelState(showOnStart);launcher=new PulseLaunchButton();
     launcher.ToggleRequested+=delegate {panel.Toggle();SetHostVisibility(panel.PanelVisible);launcher.SetExpanded(panel.Expanded);SaveEvidence();};
     launcher.DockPositionChanged+=delegate {SaveLayout();SaveEvidence();};
-    root=projectRoot; thread=threadId;nodePath=node;json.MaxJsonLength=32*1024*1024; Text="Codex Pulse 小浮条"; Size=new Size(610,108);
+    root=projectRoot; thread=threadId;nodePath=node;json.MaxJsonLength=32*1024*1024; Text=clientLabel+" · Pulse 监控"; Size=new Size(610,108);
     FormBorderStyle=FormBorderStyle.None; StartPosition=FormStartPosition.Manual; ShowInTaskbar=false; TopMost=false;
     BackColor=bg; ForeColor=Color.White; DoubleBuffered=true; AutoScaleMode=AutoScaleMode.None;
     tip.InitialDelay=650;tip.ReshowDelay=250;tip.AutoPopDelay=2500;tip.SetToolTip(this,"拖动移动 · 右键设置");
@@ -112,7 +121,7 @@ sealed class FloatingPulse : Form {
     tick.Interval=100; tick.Tick+=delegate {
       if(showRequest.WaitOne(0))panel.ShowPanel();UpdateFeed(); double seconds=clock.Elapsed.TotalSeconds;
       HostState host; lock(gate) { host=pendingHost;pendingHost=null; }
-      if(host!=null) { owner=host.Handle;hostPid=host.Pid;ownerRect=host.Bounds;ownerName=host.Pid==0?"":"Codex";scanMs=host.ScanMs;hostProbe=host.Probe;hostReady=true;
+      if(host!=null) { owner=host.Handle;hostPid=host.Pid;ownerRect=host.Bounds;ownerName=host.Pid==0?"":clientLabel;scanMs=host.ScanMs;hostProbe=host.Probe;hostReady=true;
       }
       if(hostReady){bool shown=owner!=IntPtr.Zero&&IsWindow(owner)&&IsWindowVisible(owner)&&!IsIconic(owner);panel.UpdateHost(shown,hostPid);SetHostVisibility(panel.PanelVisible);
         Rect bounds;if(shown&&GetWindowRect(owner,out bounds))ownerRect=bounds;
@@ -194,9 +203,29 @@ sealed class FloatingPulse : Form {
   static double UnixNow() {return (DateTime.UtcNow-new DateTime(1970,1,1)).TotalMilliseconds;}
   double? DataAge() {double? observed=Num(Field(view,"observedAt"));double now=paused?(Num(Field(view,"now"))??UnixNow()):UnixNow();return observed.HasValue?(double?)Math.Max(0,(now-observed.Value)/1000):null;}
   internal static bool IsCodexPath(string value) { return value!=null && (value.IndexOf("\\WindowsApps\\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)>=0 || (value.IndexOf("\\OpenAI\\Codex\\",StringComparison.OrdinalIgnoreCase)>=0 && value.IndexOf("\\bin\\",StringComparison.OrdinalIgnoreCase)<0)); }
+  internal static string ClientLabel(string client){if(client=="codex")return "Codex";if(client=="claude-code")return "Claude Code";if(client=="antigravity")return "Antigravity";throw new ArgumentException("Unsupported client");}
+  internal static string RuntimeDirectory(string project){return Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT_DATA_DIR")??Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(project,"runtime");}
+  internal static bool IsClientPath(string client,string file){
+    if(client=="codex")return IsCodexPath(file);if(String.IsNullOrEmpty(file))return false;
+    string name=Path.GetFileName(file);
+    if(client=="antigravity")return String.Equals(name,"Antigravity.exe",StringComparison.OrdinalIgnoreCase);
+    if(client!="claude-code")return false;
+    foreach(string allowed in new string[]{"WindowsTerminal.exe","Code.exe","powershell.exe","pwsh.exe","cmd.exe","OpenConsole.exe","conhost.exe"})if(String.Equals(name,allowed,StringComparison.OrdinalIgnoreCase))return true;
+    return false;
+  }
+  static HashSet<uint> ClaudeParentProcesses(){
+    HashSet<uint> result=new HashSet<uint>();Dictionary<uint,uint> parents=new Dictionary<uint,uint>();List<uint> seeds=new List<uint>();
+    IntPtr snapshot=CreateToolhelp32Snapshot(2,0);if(snapshot==new IntPtr(-1))return result;
+    try{ProcessEntry entry=new ProcessEntry();entry.Size=(uint)Marshal.SizeOf(typeof(ProcessEntry));
+      if(Process32First(snapshot,ref entry))do{parents[entry.Pid]=entry.Parent;if(String.Equals(entry.Name,"claude.exe",StringComparison.OrdinalIgnoreCase))seeds.Add(entry.Pid);}while(Process32Next(snapshot,ref entry));
+      foreach(uint seed in seeds){uint current=seed;for(int depth=0;depth<24;depth++){uint parent;if(!parents.TryGetValue(current,out parent)||parent==0||parent==current)break;result.Add(parent);current=parent;}}
+    }finally{CloseHandle(snapshot);}return result;
+  }
+  bool HasClaudeAncestor(uint pid){return claudeParents.Contains(pid);}
+  static bool HasClaudeTitle(IntPtr window){System.Text.StringBuilder title=new System.Text.StringBuilder(512);GetWindowText(window,title,title.Capacity);return title.ToString().IndexOf("Claude Code",StringComparison.OrdinalIgnoreCase)>=0;}
   void SetZoom(double value) { zoom=ClampZoom(value);ApplyDpi((uint)Math.Round(dpi*96));Rectangle work=Screen.GetWorkingArea(Location);Location=new Point(Math.Max(work.Left,Math.Min(work.Right-Width,Left)),Math.Max(work.Top,Math.Min(work.Bottom-Height,Top)));Invalidate(); }
   void SaveLayout() { try { Directory.CreateDirectory(data);File.WriteAllText(Path.Combine(data,"float-layout.json"),json.Serialize(new Dictionary<string,object>{{"left",Left},{"top",Top},{"zoom",zoom},{"motion",motion},{"speedMetric",speedMetric},{"launcherSide",launcher.PreferredSide},{"launcherOffset",launcher.Offset}})); } catch(Exception ex) {LogError(ex.Message);} }
-  string CompanionCommand(string node){string launcher=Environment.GetEnvironmentVariable("CODEX_PULSE_LAUNCHER_PATH");return !String.IsNullOrEmpty(launcher)&&File.Exists(launcher)?Quote(launcher):Quote(Application.ExecutablePath)+" "+Quote(root)+" "+Quote(node)+" "+thread;}
+  string CompanionCommand(string node){if(client!="codex")return "powershell.exe -NoProfile -ExecutionPolicy Bypass -File "+Quote(Path.Combine(root,"scripts","start-float.ps1"))+" -Client "+client+" -NodePath "+Quote(node)+" -DataDirectory "+Quote(data)+" -ButtonOnly";string launcher=Environment.GetEnvironmentVariable("CODEX_PULSE_LAUNCHER_PATH");return !String.IsNullOrEmpty(launcher)&&File.Exists(launcher)?Quote(launcher):Quote(Application.ExecutablePath)+" "+Quote(root)+" "+Quote(node)+" "+thread;}
   bool CompanionEnabled() { using(RegistryKey key=Registry.CurrentUser.OpenSubKey(RunKey)) return key!=null && String.Equals(Convert.ToString(key.GetValue(RunName)),CompanionCommand(nodePath),StringComparison.OrdinalIgnoreCase); }
   void SetCompanion(bool enabled,string node) {
     try { using(RegistryKey key=Registry.CurrentUser.CreateSubKey(RunKey)) {
@@ -219,7 +248,7 @@ sealed class FloatingPulse : Form {
     // Deactivation is delivered before a click on the settings button reaches us.
     if(clock.Elapsed.TotalSeconds-settingsClosedAt<.18)return;
     Dictionary<string,object> scope=Obj(Field(state,"scope"));bool all=Convert.ToString(Field(scope,"mode"))=="all";
-    PulseSettingsPopup popup=new PulseSettingsPopup(all?"整个 Codex · 本次监控":"指定对话 · Token 与速度联动",(int)Math.Round(zoom*100),motion,CompanionEnabled(),speedMetric);settingsPopup=popup;
+    PulseSettingsPopup popup=new PulseSettingsPopup(all?"整个 "+clientLabel+" · 本次监控":clientLabel+" · 指定对话",(int)Math.Round(zoom*100),motion,CompanionEnabled(),speedMetric);settingsPopup=popup;
     popup.MetricChanged+=delegate(string metric){speedMetric=metric;BuildCurve();SaveLayout();Invalidate();};
     popup.ScopeRequested+=delegate {BeginInvoke((MethodInvoker)ConfigureScope);};
     popup.SizeRequested+=delegate {BeginInvoke((MethodInvoker)ConfigureSize);};
@@ -236,7 +265,7 @@ sealed class FloatingPulse : Form {
   void ShowMetricInfo(){
     using(Form dialog=new Form()){
       dialog.Text="监控说明";dialog.ClientSize=new Size(460,300);dialog.FormBorderStyle=FormBorderStyle.FixedDialog;dialog.StartPosition=FormStartPosition.CenterScreen;dialog.MaximizeBox=false;dialog.MinimizeBox=false;dialog.ShowInTaskbar=false;
-      TextBox info=new TextBox();info.Multiline=true;info.ReadOnly=true;info.BorderStyle=BorderStyle.None;info.ScrollBars=ScrollBars.Vertical;info.TabStop=false;info.SetBounds(20,20,420,225);info.Text="TPS：官方输出 Token 增量 ÷ 观测秒数，可能含推理。属于上报均速，无法精确逐 Token 实时测量。\r\n\r\n字/秒：最近 2 秒收到的可见文字，不含推理和工具执行。\r\n\r\n范围：可选单个对话或本机全局；Token、速度和曲线共同切换。\r\n\r\n操作：拖主体移动，拖右下角缩放。最小化同步隐藏，后台继续采集。\r\n\r\n重新打开：移到 Codex 窗口边缘的标签，再点展开的“监控”按钮。关闭浮条后入口仍保留。";dialog.Controls.Add(info);
+      TextBox info=new TextBox();info.Multiline=true;info.ReadOnly=true;info.BorderStyle=BorderStyle.None;info.ScrollBars=ScrollBars.Vertical;info.TabStop=false;info.SetBounds(20,20,420,225);info.Text="TPS：官方输出 Token 增量 ÷ 观测秒数，可能含推理。属于上报均速，无法精确逐 Token 实时测量。\r\n\r\n字/秒：最近 2 秒收到的可见文字，不含推理和工具执行。\r\n\r\n范围：可选单个对话或本机全局；Token、速度和曲线共同切换。\r\n\r\n操作：拖主体移动，拖右下角缩放。最小化同步隐藏，后台继续采集。\r\n\r\n重新打开：移到 Codex 窗口边缘的标签，再点展开的“监控”按钮。关闭浮条后入口仍保留。";if(client!="codex")info.Text=clientLabel+"：读取本机用量记录。TPS 为最近120秒已上报输出Token/120，含等待时间，不代表瞬时模型速度。\r\n\r\n当前未提供逐字速度和账户额度；未知数据保持空缺。\r\n\r\nClaude Code：Windows 本机会话日志；在终端或 VS Code 使用。窗口无法自动识别时可用 HostPid 指定。\r\n\r\nAntigravity：实验性 SQLite 记录适配；格式不兼容时显示等待或未识别。\r\n\r\n每个客户端的设置与统计起点独立保存。";dialog.Controls.Add(info);
       Button close=new Button();close.Text="知道了";close.SetBounds(340,255,100,30);close.DialogResult=DialogResult.Cancel;dialog.Controls.Add(close);dialog.AcceptButton=close;dialog.CancelButton=close;ThemeDialog(dialog);dialog.ShowDialog(this);
     }
   }
@@ -246,10 +275,10 @@ sealed class FloatingPulse : Form {
     using(Form dialog=new Form()) {
       dialog.Text="监控范围";dialog.ClientSize=new Size(600,470);dialog.FormBorderStyle=FormBorderStyle.FixedDialog;dialog.StartPosition=FormStartPosition.CenterScreen;dialog.MaximizeBox=false;dialog.MinimizeBox=false;dialog.ShowInTaskbar=false;
       RadioButton single=new RadioButton();single.Text="选择某个对话（Token 和速度一起切换）";single.SetBounds(18,16,550,24);dialog.Controls.Add(single);
-      RadioButton all=new RadioButton();all.Text="整个 Codex（本次新上报用量 + 多对话实时速度）";all.SetBounds(18,45,560,24);dialog.Controls.Add(all);
+      RadioButton all=new RadioButton();all.Text="整个 "+clientLabel+"（本次新上报用量）";all.SetBounds(18,45,560,24);dialog.Controls.Add(all);
       Dictionary<string,object> current=Obj(Field(state,"scope"));string selectedId=Convert.ToString(Field(current,"threadId"));if(String.IsNullOrEmpty(selectedId))selectedId=thread;
       all.Checked=Convert.ToString(Field(current,"mode"))=="all";single.Checked=!all.Checked;
-      Label info=new Label();info.Text="全局统计从开启时刻起新上报的用量；账户额度不相加。文字速度为可连接对话的合计，连接数量会显示在浮条中。";info.SetBounds(20,78,560,38);dialog.Controls.Add(info);
+      Label info=new Label();info.Text=client=="codex"?"全局统计从开启时刻起新上报的用量；账户额度不相加。文字速度为可连接对话的合计，连接数量会显示在浮条中。":"只统计当前客户端的本机记录；TPS 为最近120秒上报输出/120，不提供逐字速度或账户额度。会话列表按ID显示，不读取标题正文。";info.SetBounds(20,78,560,38);dialog.Controls.Add(info);
       TextBox search=new TextBox();search.SetBounds(20,124,455,25);dialog.Controls.Add(search);
       Button refresh=new Button();refresh.Text="刷新列表";refresh.SetBounds(485,122,95,28);refresh.Click+=delegate {SendControl("list");};dialog.Controls.Add(refresh);
       ListBox list=new ListBox();list.SetBounds(20,158,560,218);dialog.Controls.Add(list);
@@ -283,25 +312,27 @@ sealed class FloatingPulse : Form {
     Stopwatch elapsed=Stopwatch.StartNew();HostState found=new HostState();
     try {
       IntPtr known=owner;uint knownPid;GetWindowThreadProcessId(known,out knownPid);
-      if(known!=IntPtr.Zero && IsWindow(known) && ownerProcesses.ContainsKey(knownPid) && clock.Elapsed.TotalSeconds-lastDiscovery<(IsIconic(known)?3:15)) {
-        Rect bounds;if(GetWindowRect(known,out bounds)) {found.Handle=known;found.Pid=knownPid;found.Bounds=bounds;found.Visible=IsWindowVisible(known)&&!IsIconic(known);found.Probe="validated Codex window; minimized companion hides but collection continues";return;}
+      if(client!="claude-code"&&known!=IntPtr.Zero && IsWindow(known) && ownerProcesses.ContainsKey(knownPid) && clock.Elapsed.TotalSeconds-lastDiscovery<(IsIconic(known)?3:15)) {
+        Rect bounds;if(GetWindowRect(known,out bounds)) {found.Handle=known;found.Pid=knownPid;found.Bounds=bounds;found.Visible=IsWindowVisible(known)&&!IsIconic(known);found.Probe="validated client window; minimized companion hides but collection continues";return;}
       }
       lastDiscovery=clock.Elapsed.TotalSeconds;
+      if(client=="claude-code"&&pinnedHost==0)claudeParents=ClaudeParentProcesses();
       Dictionary<uint,string> valid=new Dictionary<uint,string>();
-      foreach(string name in new string[]{"ChatGPT","Codex"})foreach(Process p in Process.GetProcessesByName(name)) {
+      foreach(string name in client=="codex"?new string[]{"ChatGPT","Codex"}:client=="antigravity"?new string[]{"Antigravity"}:new string[]{"WindowsTerminal","Code","powershell","pwsh","cmd","OpenConsole","conhost"})foreach(Process p in Process.GetProcessesByName(name)) {
         try { string executable; if(!ownerProcesses.TryGetValue((uint)p.Id,out executable))executable=p.MainModule.FileName;
-          if(IsCodexPath(executable))valid[(uint)p.Id]=executable;
+          if(IsClientPath(client,executable)&&(pinnedHost==0||pinnedHost==(uint)p.Id))valid[(uint)p.Id]=executable;
         } catch {} finally {p.Dispose();}
       }
       ownerProcesses=valid;long largest=0;string probe="validPids="+valid.Count+"; ";
       EnumWindows(delegate(IntPtr h,IntPtr ignored) {
         uint pid;GetWindowThreadProcessId(h,out pid);if(!valid.ContainsKey(pid))return true;
+        if(client=="claude-code"&&pinnedHost==0&&!HasClaudeAncestor(pid)&&!HasClaudeTitle(h))return true;
         Rect r;if(!GetWindowRect(h,out r))return true;probe+=pid+":"+h.ToInt64()+" "+(r.Right-r.Left)+"x"+(r.Bottom-r.Top)+" visible="+IsWindowVisible(h)+" minimized="+IsIconic(h)+"; ";if(!IsWindowVisible(h))return true;
         if(IsIconic(h)) {if(found.Handle==IntPtr.Zero) {found.Pid=pid;found.Handle=h;found.Bounds=r;found.Visible=false;}return true;}
         long area=(long)(r.Right-r.Left)*(r.Bottom-r.Top);if(area>largest && r.Right-r.Left>=400 && r.Bottom-r.Top>=250) {largest=area;found.Handle=h;found.Pid=pid;found.Visible=!IsIconic(h);found.Bounds=r;}
         return true;
       },IntPtr.Zero);
-      if(found.Pid==0)foreach(uint pid in valid.Keys) {if(found.Pid==0 || pid<found.Pid)found.Pid=pid;}
+      if(found.Pid==0&&client!="claude-code")foreach(uint pid in valid.Keys) {if(found.Pid==0 || pid<found.Pid)found.Pid=pid;}
       found.Probe=probe;
     } catch(Exception ex) {LogError(ex.Message);}
     finally {found.ScanMs=elapsed.Elapsed.TotalMilliseconds;lock(gate)pendingHost=found;System.Threading.Interlocked.Exchange(ref scanBusy,0);}
@@ -323,13 +354,13 @@ sealed class FloatingPulse : Form {
     Dictionary<string,object> usage=Obj(Field(view,"usage")), limits=Obj(Field(view,"limits"));
     double? total=Num(Field(usage,"total_tokens"));
     Dictionary<string,object> scope=Obj(Field(view,"scope"));bool all=Convert.ToString(Field(scope,"mode"))=="all";
-    bool partial=all&&((Num(Field(scope,"readErrors"))??0)>0||(Num(Field(scope,"missingDetails"))??0)>0||(Num(Field(scope,"loading"))??0)>0);
-    WriteText(g,all?(partial?"全局本次 Token*":"全局本次 Token"):"单对话 Token",28,7,muted,small); WriteText(g,total.HasValue?total.Value.ToString("N0",CultureInfo.InvariantCulture):"—",28,24,Color.White,regular);
+    bool partial=(all||client!="codex")&&((Num(Field(scope,"readErrors"))??0)>0||(Num(Field(scope,"missingDetails"))??0)>0||(Num(Field(scope,"loading"))??0)>0);
+    WriteText(g,all?(partial?"全局本次 Token*":"全局本次 Token"):partial?"单对话 Token*":"单对话 Token",28,7,muted,small); WriteText(g,total.HasValue?total.Value.ToString("N0",CultureInfo.InvariantCulture):"—",28,24,Color.White,regular);
     Dictionary<string,object> live=Obj(Field(view,"liveOutput"));bool liveReady=DisplayChartMetric()=="visible-characters-per-second";
     double? rate=Num(Field(view,"latestRate")),visibleRate=Num(Field(live,"rate")); string speed=liveReady&&visibleRate.HasValue?visibleRate.Value.ToString("0.0",CultureInfo.InvariantCulture)+" 字/s":fresh&&rate.HasValue ? rate.Value.ToString("0.0",CultureInfo.InvariantCulture)+" TPS" : "待上报";
     WriteText(g,liveReady?"实时可见输出":"输出 TPS · 上报均速",157,7,muted,small); WriteText(g,speed,157,24,liveReady||fresh?mint:muted,regular);
-    WriteText(g,"5h 剩余",308,7,muted,small); WriteText(g,Remaining(limits,"primary"),308,24,Color.White,regular);
-    WriteText(g,"周剩余",423,7,muted,small); WriteText(g,Remaining(limits,"secondary"),423,24,Color.White,regular);
+    WriteText(g,client=="codex"?"5h 剩余":"实时字速",308,7,muted,small); WriteText(g,client=="codex"?Remaining(limits,"primary"):"未提供",308,24,Color.White,regular);
+    WriteText(g,client=="codex"?"周剩余":"账户额度",423,7,muted,small); WriteText(g,client=="codex"?Remaining(limits,"secondary"):"未提供",423,24,Color.White,regular);
     WriteText(g,paused?"▶":"Ⅱ",555,17,muted,regular); WriteText(g,"×",584,17,muted,regular);
     DrawSettingsButton(g,Unit,settingsHovered,settingsFont);
     DrawSpark(g);
@@ -396,7 +427,7 @@ sealed class FloatingPulse : Form {
     if(points.Count==0) WriteText(g,"等待新的用量记录",205,74,muted,small);
     bool liveReady=DisplayChartMetric()=="visible-characters-per-second";
     Dictionary<string,object> scope=Obj(Field(view,"scope"));bool all=Convert.ToString(Field(scope,"mode"))=="all";string connection=all?"全局 "+Convert.ToString(Field(scope,"connectedStreams"))+"路"+(Convert.ToString(Field(scope,"discovering"))=="True"?" 发现中":(Num(Field(scope,"unavailableStreams"))??0)>0?" 部分":"")+" · 字/s":"本机事件流 · 字/s";
-    double? age=DataAge(); WriteText(g,liveReady?connection:all?"全局 · 上报 TPS（120s窗口）":speedMetric=="characters"?"文字流断开 · 回退上报 TPS":"输出 TPS · 上报区间均速",14,48,muted,small); WriteText(g,error??(age.HasValue?"用量 "+age.Value.ToString("0")+"s前":"等候回报"),477,48,muted,small);
+    double? age=DataAge(); WriteText(g,client!="codex"?clientLabel+" · 120s 上报 TPS":liveReady?connection:all?"全局 · 上报 TPS（120s窗口）":speedMetric=="characters"?"文字流断开 · 回退上报 TPS":"输出 TPS · 上报区间均速",14,48,muted,small); WriteText(g,error??(age.HasValue?"用量 "+age.Value.ToString("0")+"s前":"等候回报"),477,48,muted,small);
     if(liveReady) {double? reported=Num(Field(view,"latestRate"));WriteText(g,age.HasValue&&age.Value<=15&&reported.HasValue?"上报区间 "+reported.Value.ToString("0.0",CultureInfo.InvariantCulture)+" tok/s":"上报区间：待更新",205,48,muted,small);}
   }
   void SaveEvidence() {SaveEvidence(true);}
@@ -404,14 +435,14 @@ sealed class FloatingPulse : Form {
     try {
       string directory=data; Directory.CreateDirectory(directory);
       Dictionary<string,object> report=new Dictionary<string,object>();
-      report["pid"]=Process.GetCurrentProcess().Id; report["visible"]=Visible; report["ownerProcess"]=ownerName; report["ownerHandle"]=owner.ToInt64();
+      report["pid"]=Process.GetCurrentProcess().Id;report["pinnedHostPid"]=pinnedHost; report["visible"]=Visible; report["ownerProcess"]=ownerName; report["ownerHandle"]=owner.ToInt64();
       report["left"]=Left; report["top"]=Top; report["width"]=Width; report["height"]=Height; report["paused"]=paused;
       report["ownerLeft"]=ownerRect.Left; report["ownerTop"]=ownerRect.Top; report["ownerRight"]=ownerRect.Right; report["ownerBottom"]=ownerRect.Bottom;
       report["ownerVisible"]=owner!=IntPtr.Zero && IsWindowVisible(owner); report["ownerMinimized"]=owner!=IntPtr.Zero && IsIconic(owner);
       report["actualOwnerHandle"]=GetWindow(Handle,4).ToInt64();
       report["dpiScale"]=dpi;report["zoom"]=zoom;report["motion"]=motion;report["hostReady"]=hostReady;report["hostPid"]=hostPid;report["hostScanMs"]=scanMs;report["hostProbe"]=hostProbe;report["feedSuspended"]=feedSuspended; report["renderFps"]=fps;
       double? observed=Num(Field(state,"observedAt"));
-      report["version"]="0.8.1";report["fastAnimation"]=fastTimer;report["observedAt"]=observed;report["dataAgeSeconds"]=observed.HasValue?(object)Math.Max(0,((DateTime.UtcNow-new DateTime(1970,1,1)).TotalMilliseconds-observed.Value)/1000):null;report["lastActivity"]=Field(state,"lastActivity");
+      report["version"]="0.9.0";report["client"]=client;report["clientLabel"]=clientLabel;report["capabilities"]=Field(state,"capabilities");report["fastAnimation"]=fastTimer;report["observedAt"]=observed;report["dataAgeSeconds"]=observed.HasValue?(object)Math.Max(0,((DateTime.UtcNow-new DateTime(1970,1,1)).TotalMilliseconds-observed.Value)/1000):null;report["lastActivity"]=Field(state,"lastActivity");
       report["placement"]= "codex-window-layer";report["topMost"]=TopMost;report["nativeTopMost"]=IsNativeTopMost(Handle);report["layerAligned"]=layerAligned;
       report["threadId"]=Field(state,"selectedId");report["launchThreadId"]=thread;report["scope"]=Field(state,"scope");report["catalogCount"]=chatChoices.Count;report["usage"]=Field(state,"usage");report["limits"]=Field(state,"limits"); report["checkedAt"]=DateTime.UtcNow.ToString("o"); report["error"]=error;
       report["totalTokens"]=Field(Obj(Field(state,"usage")),"total_tokens"); report["rate"]=Field(state,"latestRate");
@@ -432,11 +463,11 @@ sealed class FloatingPulse : Form {
     if(args.Length!=3&&args.Length!=4) return;if(args.Length==4&&args[3]!="--show")return; Guid id; if(!Guid.TryParse(args[2],out id)) return;
     try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { SetProcessDPIAware(); }
     Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
-    Application.ThreadException += delegate(object sender,System.Threading.ThreadExceptionEventArgs e) { File.AppendAllText(Path.Combine(Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(args[0],"runtime"),"float-error.log"),DateTime.UtcNow.ToString("o")+" "+e.Exception.ToString()+Environment.NewLine); };
-    AppDomain.CurrentDomain.UnhandledException += delegate(object sender,UnhandledExceptionEventArgs e) { File.AppendAllText(Path.Combine(Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(args[0],"runtime"),"float-error.log"),DateTime.UtcNow.ToString("o")+" "+Convert.ToString(e.ExceptionObject)+Environment.NewLine); };
-    using(System.Threading.Mutex singleton=new System.Threading.Mutex(false,InstanceName(Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(args[0],"runtime")))) {
+    Application.ThreadException += delegate(object sender,System.Threading.ThreadExceptionEventArgs e) { File.AppendAllText(Path.Combine(RuntimeDirectory(args[0]),"float-error.log"),DateTime.UtcNow.ToString("o")+" "+e.Exception.ToString()+Environment.NewLine); };
+    AppDomain.CurrentDomain.UnhandledException += delegate(object sender,UnhandledExceptionEventArgs e) { File.AppendAllText(Path.Combine(RuntimeDirectory(args[0]),"float-error.log"),DateTime.UtcNow.ToString("o")+" "+Convert.ToString(e.ExceptionObject)+Environment.NewLine); };
+    using(System.Threading.Mutex singleton=new System.Threading.Mutex(false,InstanceName(RuntimeDirectory(args[0])))) {
       bool acquired=false;try {acquired=singleton.WaitOne(0,false);}catch(System.Threading.AbandonedMutexException){acquired=true;}
-      if(!acquired){if(args.Length==4)try{using(var request=System.Threading.EventWaitHandle.OpenExisting(InstanceName(Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(args[0],"runtime"))+"-show"))request.Set();}catch{}return;}
+      if(!acquired){if(args.Length==4)try{using(var request=System.Threading.EventWaitHandle.OpenExisting(InstanceName(RuntimeDirectory(args[0]))+"-show"))request.Set();}catch{}return;}
       try {Application.Run(new FloatingPulse(args[0],args[1],args[2],args.Length==4));}finally {singleton.ReleaseMutex();}
     }
   }
@@ -465,7 +496,7 @@ sealed class PulseLaunchButton : Form {
   internal bool Stowed {get{return !dock.Outside&&!hovered&&!pressed&&!dragging;}}
   protected override bool ShowWithoutActivation {get{return true;}}
   protected override CreateParams CreateParams {get{CreateParams value=base.CreateParams;value.ExStyle|=0x08000000|0x80;return value;}}
-  internal PulseLaunchButton(){Text="Codex 监控按钮";AccessibleName="打开监控浮条";AccessibleRole=AccessibleRole.PushButton;FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;ShowInTaskbar=false;TopMost=false;AutoScaleMode=AutoScaleMode.None;DoubleBuffered=true;BackColor=Color.FromArgb(18,39,47);Cursor=Cursors.Hand;Font=new Font("Microsoft YaHei UI",13,FontStyle.Bold,GraphicsUnit.Pixel);Size=new Size(84,34);}
+  internal PulseLaunchButton(){Text="客户端监控按钮";AccessibleName="打开监控浮条";AccessibleRole=AccessibleRole.PushButton;FormBorderStyle=FormBorderStyle.None;StartPosition=FormStartPosition.Manual;ShowInTaskbar=false;TopMost=false;AutoScaleMode=AutoScaleMode.None;DoubleBuffered=true;BackColor=Color.FromArgb(18,39,47);Cursor=Cursors.Hand;Font=new Font("Microsoft YaHei UI",13,FontStyle.Bold,GraphicsUnit.Pixel);Size=new Size(84,34);}
   internal static double SafeOffset(double value){return Double.IsNaN(value)||Double.IsInfinity(value) ? .35 : Math.Max(0,Math.Min(1,value));}
   internal static DockLayout PlaceDock(Rectangle host,Rectangle work,float unit,string side,double fraction,bool reveal){
     int full=(int)Math.Round(84*unit),height=(int)Math.Round(34*unit),gap=(int)Math.Round(8*unit);
@@ -550,7 +581,7 @@ sealed class PulseSettingsPopup : Form {
     tps=AddButton("TPS · 上报均速",18,273,147,30,delegate {choose("reported-tps");});characters=AddButton("字/秒 · 实时文字",173,273,147,30,delegate {choose("characters");});choose(metric);
     CheckBox motionToggle=AddToggle("动态流光背景",18,322,motion);motionToggle.CheckedChanged+=delegate {if(MotionChanged!=null)MotionChanged(motionToggle.Checked);};
     AddLabel("关闭后使用静态背景",44,349,270,17,caption,muted);
-    companionToggle=AddToggle("登录后自动伴随 Codex",18,375,companion);companionToggle.CheckedChanged+=delegate {if(!updating&&CompanionChanged!=null)CompanionChanged(companionToggle.Checked);};
+    companionToggle=AddToggle("登录后自动伴随当前客户端",18,375,companion);companionToggle.CheckedChanged+=delegate {if(!updating&&CompanionChanged!=null)CompanionChanged(companionToggle.Checked);};
     AddLabel("点击面板外部或按 Esc 收起",21,424,290,20,caption,muted);
     Button exit=AddButton("退出监控及快捷按钮",18,453,302,28,delegate {Close();if(ExitRequested!=null)ExitRequested();});exit.ForeColor=Color.FromArgb(247,173,181);
     foreach(Control control in Controls){logicalBounds[control]=control.Bounds;logicalFonts[control]=control.Font;}

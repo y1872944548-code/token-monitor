@@ -1,14 +1,22 @@
-﻿param([string]$ThreadId = '', [switch]$EnableCompanion, [switch]$ButtonOnly, [string]$NodePath = '')
+﻿param([string]$ThreadId = '', [switch]$EnableCompanion, [switch]$ButtonOnly, [string]$NodePath = '', [ValidateSet('codex','claude-code','antigravity')][string]$Client = 'codex', [uint32]$HostPid = 0, [string]$DataDirectory = '')
 $ErrorActionPreference = 'Stop'
 $pulseRoot = Split-Path -Parent $PSScriptRoot
-$pulseRuntime = Join-Path $pulseRoot 'runtime'
+$pulseBase = if ($env:CODEX_PULSE_DATA_DIR) { $env:CODEX_PULSE_DATA_DIR } else { Join-Path $pulseRoot 'runtime' }
+$pulseRuntime = if ($Client -eq 'codex') { Join-Path $pulseRoot 'runtime' } else { Join-Path $pulseRoot ('runtime\clients\' + $Client) }
 $pulseExe = Join-Path $pulseRuntime 'CodexPulse.exe'
 $pulseNode = if ($NodePath) { $NodePath } else { (Get-Command node.exe -ErrorAction Stop).Source }
 $pulseVersion = & $pulseNode -p 'process.versions.node'
 if ($LASTEXITCODE -ne 0 -or [int]($pulseVersion.Split('.')[0]) -lt 24) { throw 'Please install Node.js 24 LTS first.' }
 $pulseCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-$pulseData = if ($env:CODEX_PULSE_DATA_DIR) { $env:CODEX_PULSE_DATA_DIR } else { $pulseRuntime }
-if (!$ThreadId) { $ThreadId = $env:CODEX_THREAD_ID }
+$pulseData = if ($DataDirectory) { [System.IO.Path]::GetFullPath($DataDirectory) } elseif ($Client -eq 'codex') { $pulseBase } else { Join-Path $pulseBase ('clients\' + $Client) }
+$pulsePreviousClient = $env:CODEX_PULSE_CLIENT
+$pulsePreviousData = $env:CODEX_PULSE_CLIENT_DATA_DIR
+$pulsePreviousHost = $env:CODEX_PULSE_HOST_PID
+try {
+$env:CODEX_PULSE_CLIENT = $Client
+$env:CODEX_PULSE_CLIENT_DATA_DIR = $pulseData
+$env:CODEX_PULSE_HOST_PID = if ($HostPid) { [string]$HostPid } else { '' }
+if (!$ThreadId -and $Client -eq 'codex') { $ThreadId = $env:CODEX_THREAD_ID }
 if (!$ThreadId) {
   $pulseBootstrap = & $pulseNode (Join-Path $pulseRoot 'src\portable-bootstrap.mjs')
   if ($LASTEXITCODE -ne 0) { throw 'Monitor initialization failed; saved settings were preserved.' }
@@ -29,7 +37,7 @@ foreach ($pulseProcess in @(Get-Process -Name 'CodexPulse' -ErrorAction Silently
   $pulseCollapse = $ButtonOnly -and $pulseExisting -and $pulseExisting.panelExpanded
   $pulseNeedExpand = !$ButtonOnly -and $pulseExisting -and ($pulseExisting.PSObject.Properties.Name -contains 'panelExpanded') -and !$pulseExisting.panelExpanded
   $pulseDismissed = $pulseExisting -and $pulseExisting.hostReady -and !$pulseExisting.visible -and !$pulseExisting.ownerMinimized
-  if ($pulseExisting -and $pulseExisting.pid -eq $pulseProcess.Id -and ($pulseExisting.threadId -eq $ThreadId -or $pulseExisting.launchThreadId -eq $ThreadId) -and !$pulseNeedsBuild -and !$EnableCompanion -and (!$pulseDismissed -or $ButtonOnly) -and !$pulseCollapse -and !$pulseNeedExpand) { Write-Output 'Codex迷你浮条已在运行'; exit 0 }
+  if ($pulseExisting -and $pulseExisting.pid -eq $pulseProcess.Id -and $pulseExisting.pinnedHostPid -eq $HostPid -and ($pulseExisting.threadId -eq $ThreadId -or $pulseExisting.launchThreadId -eq $ThreadId) -and !$pulseNeedsBuild -and !$EnableCompanion -and (!$pulseDismissed -or $ButtonOnly) -and !$pulseCollapse -and !$pulseNeedExpand) { Write-Output 'Client monitor is already running'; exit 0 }
   Stop-Process -Id $pulseProcess.Id
   $pulseProcess.WaitForExit(1500) | Out-Null
 }
@@ -42,7 +50,12 @@ if ($EnableCompanion) {
   $pulseRunKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
   try {
     $pulseCommand = ('"{0}" "{1}" "{2}" {3}' -f $pulseExe,$pulseRoot,$pulseNode,$ThreadId)
-    $pulseRunKey.SetValue('CodexPulseCompanion',$pulseCommand,[Microsoft.Win32.RegistryValueKind]::String)
+    $pulseRunName = 'CodexPulseCompanion'
+    if ($Client -ne 'codex') {
+      $pulseRunName += '-' + $Client
+      $pulseCommand = ('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{0}" -Client {1} -NodePath "{2}" -DataDirectory "{3}" -ButtonOnly' -f (Join-Path $PSScriptRoot 'start-float.ps1'),$Client,$pulseNode,$pulseData)
+    }
+    $pulseRunKey.SetValue($pulseRunName,$pulseCommand,[Microsoft.Win32.RegistryValueKind]::String)
   } finally { $pulseRunKey.Dispose() }
 }
 $pulseArguments = @(('"{0}"' -f $pulseRoot), ('"{0}"' -f $pulseNode), $ThreadId)
@@ -58,4 +71,9 @@ for ($pulseReadyAttempt=0; $pulseReadyAttempt -lt 100; $pulseReadyAttempt++) {
   Start-Sleep -Milliseconds 50
 }
 if (!$pulseReady) { throw '监控组件未在5秒内上报启动状态，请检查本机运行日志' }
-Write-Output '监控按钮已伴随Codex：移到窗口边缘展开监控按钮，单击打开，×收起后仍可再点打开。'
+Write-Output ('Monitor ready for ' + $Client + '. The edge button appears when a matching client window is found.')
+} finally {
+  $env:CODEX_PULSE_CLIENT = $pulsePreviousClient
+  $env:CODEX_PULSE_CLIENT_DATA_DIR = $pulsePreviousData
+  $env:CODEX_PULSE_HOST_PID = $pulsePreviousHost
+}

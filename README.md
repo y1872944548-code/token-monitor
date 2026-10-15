@@ -1,6 +1,8 @@
 # Codex Pulse · Codex 运行监控
 
-Windows 原生悬浮监控工具，查看本机 Codex 对话的已上报 Token、输出速度和账户额度。支持指定对话 / 本机全局范围、滚动曲线、窗口边缘按钮、位置记忆与 60%–200% 缩放。
+Windows 原生悬浮监控工具，查看本机 Codex 对话的已上报 Token、输出速度和账户额度。新增 Claude Code 本机日志适配与 Antigravity 实验性 SQLite 用量适配。支持指定对话 / 本机全局范围、滚动曲线、窗口边缘按钮、位置记忆与 60%–200% 缩放。
+
+Claude Code 使用 `npm run start:claude`，Antigravity 使用 `npm run start:antigravity`；首次仍先执行下面的安装命令。新客户端的可用指标、Windows 窗口识别、支持格式和边界见[多客户端说明](docs/CLIENTS.md)。
 
 它通过本机日志和桌面事件读取统计数据，不修改 Codex 客户端。实时采集不需要模型轮询。项目由独立开发者维护，内部桌面事件接口可能随 Codex 升级而变化。
 

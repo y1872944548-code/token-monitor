@@ -5,6 +5,8 @@ description: 打开 Windows 本机 Codex 监控浮条，查看已上报 Token、
 
 用户要求打开监控浮条时，调用一次 `pulse_open`，沿用保存的范围、位置和大小。有可核验的本机聊天 ID 时可以传入 `threadId`；否则省略。使用当前插件工具，先检查返回结果，再简短说明是否成功。
 
+用户明确要求 Claude Code 或 Antigravity 时，分别传入 `client: "claude-code"` / `client: "antigravity"`；不指定时保留 Codex。新客户端没有逐字速度和账户额度，Antigravity 仅支持已定义的实验性 SQLite 用量格式；按 capabilities / coverage 报告结果，不能将窗口启动成功当成用量来源已验证。具体命令、HostPid 与覆盖边界见项目 `docs/CLIENTS.md`。
+
 若工具尚未配置，定位当前插件安装目录，按照其 README 运行 `npm run setup:windows`；本机路径由 `npm run configure:mcp` 生成，不能套用开发者电脑的绝对路径。原生浮条仅支持 Windows；其他平台可运行核心测试与日志摘要。启动失败时报告实际错误，不能声称窗口已经显示。
 
 主界面为附着于 Codex 窗口边缘的独立原生按钮和浮条。无需打开网页、侧栏或聊天卡片。按钮展开/收起、拖动与设置操作不经过模型；不要循环调用 MCP 刷新数据。`pulse_snapshot` 仅在用户询问统计时按需调用，指定 `threadId` 应返回该对话的数据。

@@ -1,5 +1,13 @@
 # 本次验证记录
 
+## 0.9.0 多客户端
+
+新增 Claude Code 本机 JSONL 与 Antigravity 实验性 SQLite 适配，覆盖重复报告、缓存计数、局部/全局范围、设置恢复、未知格式、SQLite 只读和客户端隔离。新增集成测试实际启动当前 MCP 和原生窗口所使用的 Node feed，使用合成文件验证更新、范围切换和父进程关闭后的退出。
+
+当前 Linux 本地回归共 35 项：34 通过、0 失败、1 项 Windows 路径检查跳过。PowerShell 三个脚本语法检查通过。Windows 作业还包含更新后的客户端窗口路径、数据目录与单例隔离检查；以上测试不代表真实安装的 Claude Code / Antigravity 端到端验收，具体数据格式边界见 [CLIENTS.md](CLIENTS.md)。
+
+## 0.8.1 初次源码整理
+
 本次在 Linux 云环境、Node.js 24.19.0 / npm 11.9.0 中检查。原始上传包保留，没有使用其中的 `node_modules` 或 Windows 可执行文件作为验证依据。
 
 | 检查 | 结果与范围 |

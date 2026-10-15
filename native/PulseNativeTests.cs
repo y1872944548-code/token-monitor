@@ -68,6 +68,14 @@ static class PulseNativeTests {
     Check(FloatingPulse.IsCodexPath(@"C:\Program Files\WindowsApps\OpenAI.Codex_26.0\app\ChatGPT.exe"),"desktop path accepted");
     Check(!FloatingPulse.IsCodexPath(@"C:\Other\ChatGPT.exe"),"other apps rejected");
     Check(!FloatingPulse.IsCodexPath(@"C:\Users\example\AppData\Local\OpenAI\Codex\bin\version\codex.exe"),"headless CLI must not keep companion visible after desktop exits");
+    Check(FloatingPulse.ClientLabel("claude-code")=="Claude Code"&&FloatingPulse.ClientLabel("antigravity")=="Antigravity","client labels remain explicit");
+    Check(FloatingPulse.IsClientPath("claude-code",@"C:\Apps\WindowsTerminal.exe")&&FloatingPulse.IsClientPath("claude-code",@"C:\Apps\Code.exe"),"Claude can attach to terminal or VS Code hosts");
+    Check(!FloatingPulse.IsClientPath("claude-code",@"C:\Apps\Antigravity.exe")&&!FloatingPulse.IsClientPath("antigravity",@"C:\Apps\Code.exe"),"host windows stay isolated between clients");
+    Check(FloatingPulse.IsClientPath("antigravity",@"C:\Apps\Antigravity.exe"),"Antigravity native host recognized");
+    string oldData=Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT_DATA_DIR");
+    try{Environment.SetEnvironmentVariable("CODEX_PULSE_CLIENT_DATA_DIR",output);Check(FloatingPulse.RuntimeDirectory("unrelated")==output,"client-specific data overrides shared runtime");}
+    finally{Environment.SetEnvironmentVariable("CODEX_PULSE_CLIENT_DATA_DIR",oldData);}
+    Check(FloatingPulse.InstanceName(Path.Combine(output,"claude-code"))!=FloatingPulse.InstanceName(Path.Combine(output,"antigravity")),"client singletons do not share a show request or settings directory");
     // Use only our own hidden test forms: no desktop application is activated or repositioned.
     using(Form host=new Form())using(Form companion=new Form())using(Form other=new Form())using(PulseLaunchButton launcher=new PulseLaunchButton()) {
       companion.ShowInTaskbar=false;companion.TopMost=false;

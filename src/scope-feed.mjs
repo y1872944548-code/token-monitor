@@ -1,13 +1,14 @@
 import {createInterface} from 'node:readline';
-import path from 'node:path';
-import {fileURLToPath} from 'node:url';
 import {ScopeEngine} from './scope-engine.mjs';
 import {isId} from './thread-catalog.mjs';
+import {clientId,clientSettingsFile} from './clients.mjs';
+import {ClientMonitor} from './client-monitor.mjs';
 const index=process.argv.indexOf('--thread'),id=process.argv[index+1];if(index<0||!isId(id))throw new Error('需要明确的聊天ID');
-const settingsFile=process.env.CODEX_PULSE_SETTINGS_FILE||(process.env.CODEX_PULSE_DATA_DIR?path.join(process.env.CODEX_PULSE_DATA_DIR,'monitor-settings.json'):fileURLToPath(new URL('../runtime/monitor-settings.json',import.meta.url)));
+const client=clientId();
+const settingsFile=clientSettingsFile(client);
 let busy=false,queued=false,scheduled,enabled=true,pendingScope,includeCatalog=true;
 function schedule(delay=50){if(!enabled||scheduled)return;scheduled=setTimeout(()=>{scheduled=null;void sample();},delay);}
-const engine=new ScopeEngine({threadId:id,settingsFile,onChange:()=>schedule(100)});await engine.initialize();
+const engine=client==='codex'?new ScopeEngine({threadId:id,settingsFile,onChange:()=>schedule(100)}):new ClientMonitor({client,threadId:id,settingsFile});await engine.initialize();
 async function sample(){if(!enabled)return;if(busy){queued=true;return;}busy=true;
   try{if(pendingScope){const request=pendingScope;pendingScope=null;try{await engine.select(request);}catch(error){engine.controlError=error.message;}}
     await engine.tick();const value=engine.snapshot();value.points=value.points.slice(-250).map(({time,rate})=>({time,rate}));value.reportedPoints=value.reportedPoints.slice(-250).map(({time,rate})=>({time,rate}));delete value.tokenPoints;delete value.sessions;
