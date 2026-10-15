@@ -10,8 +10,12 @@ const child = spawn(process.execPath, ['--test', '--test-reporter=spec', '--test
 const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (status, signal) => resolve(signal ? 1 : status ?? 1)); });
 if (code && process.env.GITHUB_STEP_SUMMARY) {
   const xml = await readFile(report, 'utf8').catch(() => 'Test runner ended before producing its report.');
-  const failures = [...xml.matchAll(/<testcase\b[\s\S]*?<\/testcase>/g)].map(match => match[0]).filter(value => /<(?:failure|error)\b/.test(value));
-  const detail = (failures.join('\n') || xml).slice(0, 48000).replace(/`/g, "'");
+  const failures = [...xml.matchAll(/<testcase\b[^>]*\/>|<testcase\b[^>]*>[\s\S]*?<\/testcase>/g)].map(match => match[0]).filter(value => /<(?:failure|error)\b/.test(value));
+  const detail = (failures.map(value => {
+    const name = value.match(/\bname="([^"]*)"/)?.[1] || 'Test failure';
+    const failure = value.match(/<(failure|error)\b[^>]*>([\s\S]*?)<\/\1>/)?.[2] || value;
+    return name + '\n' + failure;
+  }).join('\n\n') || xml).slice(0, 48000).replace(/`/g, "'");
   if (process.env.GITHUB_ACTIONS === 'true') {
     const annotation = detail.slice(0, 12000).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
     console.log('::error title=Node test failure details::' + annotation);
