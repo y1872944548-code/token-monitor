@@ -12,21 +12,22 @@ const exec = promisify(execFile);
 
 test('Windows launch script starts isolated Claude/Antigravity monitors and follows a test host minimize/restore', { skip: process.platform !== 'win32' || process.env.CODEX_PULSE_RUN_NATIVE_STARTUP_TESTS !== '1', timeout: 90000 }, async t => {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pulse-windows-startup-')));
-  const sourceProject = fileURLToPath(new URL('../', import.meta.url)), project = path.join(root, 'app'), hosts = [], monitors = [];
+  const sourceProject = fileURLToPath(new URL('../', import.meta.url)), project = path.join(root, 'app'), hosts = [], monitors = [], helpers = [];
   // The launcher owns processes by executable path. Use a private copy so even
   // an explicitly enabled local test can never stop the user's real monitors.
   for (const directory of ['src', 'native', 'scripts']) await cp(path.join(sourceProject, directory), path.join(project, directory), { recursive: true });
   const compiler = path.join(process.env.WINDIR, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
   const source = path.join(root, 'Host.cs');
-  await writeFile(source, `using System;using System.IO;using System.Windows.Forms;
+  await writeFile(source, `using System;using System.IO;using System.Diagnostics;using System.Windows.Forms;
 static class Host { [STAThread]static void Main(string[] args){Application.EnableVisualStyles();using(Form form=new Form())using(Timer timer=new Timer()){
+if(args.Length>1){ProcessStartInfo info=new ProcessStartInfo(args[1],"-e setInterval(()=>{},1000)");info.UseShellExecute=false;info.CreateNoWindow=true;Process child=Process.Start(info);File.WriteAllText(args[0]+".childpid",child.Id.ToString());}
 form.Text="Pulse CI test host";form.Width=900;form.Height=650;form.Shown+=delegate{File.WriteAllText(args[0]+".ready","ready");};
 string previous="";timer.Interval=100;timer.Tick+=delegate{try{string command=File.Exists(args[0])?File.ReadAllText(args[0]):"";if(command==previous)return;previous=command;if(command=="minimize")form.WindowState=FormWindowState.Minimized;else if(command=="restore"){form.WindowState=FormWindowState.Normal;form.Show();}else if(command=="exit")form.Close();}catch{}};
 timer.Start();Application.Run(form);}}}`);
   const cleanup = path.join(root, 'cleanup.ps1');
   await writeFile(cleanup, 'param([int]$MonitorPid,[string]$ExpectedExe)\n$p=Get-Process -Id $MonitorPid -ErrorAction SilentlyContinue\nif($p -and $p.Path -eq $ExpectedExe){& taskkill.exe /PID $MonitorPid /T /F | Out-Null}\n');
   t.after(async () => {
-    for (const monitor of monitors) try { await exec('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cleanup, '-MonitorPid', String(monitor.pid), '-ExpectedExe', monitor.exe], { windowsHide: true }); } catch {}
+    for (const monitor of [...monitors, ...helpers]) try { await exec('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cleanup, '-MonitorPid', String(monitor.pid), '-ExpectedExe', monitor.exe], { windowsHide: true }); } catch {}
     for (const host of hosts) if (host.exitCode === null) host.kill();
     await delay(300); await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
@@ -42,15 +43,20 @@ timer.Start();Application.Run(form);}}}`);
       const hostExe = path.join(root, client === 'claude-code' ? 'Code.exe' : 'Antigravity.exe');
       await exec(compiler, ['/nologo', '/target:winexe', '/reference:System.Windows.Forms.dll', '/out:' + hostExe, source], { windowsHide: true });
       const control = path.join(root, client + '.control');
-      const host = spawn(hostExe, [control], { windowsHide: false, stdio: 'ignore' }); hosts.push(host);
+      const host = spawn(hostExe, client === 'claude-code' ? [control, process.execPath] : [control], { windowsHide: false, stdio: 'ignore' }); hosts.push(host);
       await wait(async () => (await readFile(control + '.ready', 'utf8').catch(() => '')) === 'ready');
+      const launchEnv = { ...env };
+      if (client === 'claude-code') {
+        const helperPid = Number(await readFile(control + '.childpid', 'utf8')); helpers.push({ pid: helperPid, exe: process.execPath });
+        launchEnv.CODEX_PULSE_CLAUDE_LAUNCH_PID = String(helperPid);
+      }
       const data = path.join(root, client); await mkdir(data);
       const savedId = client === 'claude-code' ? '22222222-2222-4222-8222-222222222222' : session;
       await writeFile(path.join(data, 'monitor-settings.json'), JSON.stringify({ mode: 'thread', threadId: savedId, globalStartedAt: null }));
       const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(project, 'scripts', 'start-float.ps1'), '-Client', client,
-        '-NodePath', process.execPath, '-HostPid', String(host.pid), '-DataDirectory', data];
-      if (client === 'claude-code') args.push('-ThreadId', session, '-FollowThread');
-      await exec('powershell.exe', args, { env, windowsHide: true, timeout: 30000 });
+        '-NodePath', process.execPath, '-DataDirectory', data];
+      if (client === 'claude-code') args.push('-ThreadId', session, '-FollowThread'); else args.push('-HostPid', String(host.pid));
+      await exec('powershell.exe', args, { env: launchEnv, windowsHide: true, timeout: 30000 });
       await wait(async () => { const value = await state(data); return value?.client === client && value.hostPid === host.pid && value.visible && value.scope; });
       const value = await state(data); monitors.push({ pid: value.pid, exe: path.join(project, 'runtime', 'clients', client, 'CodexPulse.exe') });
       assert.equal(value.scope.client, client); assert.equal(value.nativeTopMost, false);
@@ -74,7 +80,7 @@ timer.Start();Application.Run(form);}}}`);
         assert.equal(JSON.parse(await readFile(path.join(data, 'monitor-settings.json'), 'utf8')).threadId, savedId, 'stream launch preserves saved scope');
       }
       // Reopening this client must reuse its own instance and leave the other one alive.
-      await exec('powershell.exe', args, { env, windowsHide: true, timeout: 30000 }); assert.equal((await state(data)).pid, value.pid);
+      await exec('powershell.exe', args, { env: launchEnv, windowsHide: true, timeout: 30000 }); assert.equal((await state(data)).pid, value.pid);
     }
     assert.notEqual(monitors[0].pid, monitors[1].pid);
     for (const monitor of monitors) assert.doesNotThrow(() => process.kill(monitor.pid, 0));

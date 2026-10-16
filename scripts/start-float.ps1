@@ -37,7 +37,8 @@ foreach ($pulseProcess in @(Get-Process -Name 'CodexPulse' -ErrorAction Silently
   $pulseCollapse = $ButtonOnly -and $pulseExisting -and $pulseExisting.panelExpanded
   $pulseNeedExpand = !$ButtonOnly -and $pulseExisting -and ($pulseExisting.PSObject.Properties.Name -contains 'panelExpanded') -and !$pulseExisting.panelExpanded
   $pulseDismissed = $pulseExisting -and $pulseExisting.hostReady -and !$pulseExisting.visible -and !$pulseExisting.ownerMinimized
-  if ($pulseExisting -and $pulseExisting.pid -eq $pulseProcess.Id -and $pulseExisting.pinnedHostPid -eq $HostPid -and (!$FollowThread -or ($pulseExisting.scope.mode -eq 'thread' -and $pulseExisting.threadId -eq $ThreadId)) -and ($pulseExisting.threadId -eq $ThreadId -or $pulseExisting.launchThreadId -eq $ThreadId) -and !$pulseNeedsBuild -and !$EnableCompanion -and (!$pulseDismissed -or $ButtonOnly) -and !$pulseCollapse -and !$pulseNeedExpand) { Write-Output 'Client monitor is already running'; exit 0 }
+  $pulseSameLauncher = !$env:CODEX_PULSE_CLAUDE_LAUNCH_PID -or ([string]$pulseExisting.streamLauncherPid -eq $env:CODEX_PULSE_CLAUDE_LAUNCH_PID)
+  if ($pulseExisting -and $pulseExisting.pid -eq $pulseProcess.Id -and $pulseSameLauncher -and $pulseExisting.pinnedHostPid -eq $HostPid -and (!$FollowThread -or ($pulseExisting.scope.mode -eq 'thread' -and $pulseExisting.threadId -eq $ThreadId)) -and ($pulseExisting.threadId -eq $ThreadId -or $pulseExisting.launchThreadId -eq $ThreadId) -and !$pulseNeedsBuild -and !$EnableCompanion -and (!$pulseDismissed -or $ButtonOnly) -and !$pulseCollapse -and !$pulseNeedExpand) { Write-Output 'Client monitor is already running'; exit 0 }
   Stop-Process -Id $pulseProcess.Id
   $pulseProcess.WaitForExit(1500) | Out-Null
 }

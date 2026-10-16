@@ -11,7 +11,10 @@ import { clientDataDir } from './clients.mjs';
 
 export async function resolveClaude(explicit, env = process.env) {
   const candidates = explicit ? [path.resolve(explicit)] : [
-    ...(env.PATH || env.Path || '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, process.platform === 'win32' ? 'claude.exe' : 'claude')),
+    ...(env.PATH || env.Path || '').split(path.delimiter).filter(Boolean).flatMap(dir => process.platform === 'win32' ? [
+      path.join(dir, 'claude.exe'), path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
+      path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js')
+    ] : [path.join(dir, 'claude')]),
     path.join(os.homedir(), '.local', 'bin', process.platform === 'win32' ? 'claude.exe' : 'claude')
   ];
   for (const file of candidates) try {
@@ -92,5 +95,6 @@ export async function runClaudeStream({ prompt, sessionId = randomUUID(), resume
 
 export async function openClaudeMonitor(project, sessionId, dataDir) {
   await promisify(execFile)('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(project, 'scripts', 'start-float.ps1'),
-    '-Client', 'claude-code', '-NodePath', process.execPath, '-ThreadId', sessionId, '-FollowThread', '-DataDirectory', dataDir], { windowsHide: true, timeout: 30000 });
+    '-Client', 'claude-code', '-NodePath', process.execPath, '-ThreadId', sessionId, '-FollowThread', '-DataDirectory', dataDir],
+  { windowsHide: true, timeout: 30000, env: { ...process.env, CODEX_PULSE_CLAUDE_LAUNCH_PID: String(process.pid) } });
 }

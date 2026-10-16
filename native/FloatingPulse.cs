@@ -37,7 +37,7 @@ sealed class FloatingPulse : Form {
   [DllImport("user32.dll", EntryPoint="GetWindowLongW")] static extern int GetStyle32(IntPtr h, int n);
   [DllImport("user32.dll",SetLastError=true)] static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int width,int height,uint flags);
   [StructLayout(LayoutKind.Sequential)] struct Rect { public int Left, Top, Right, Bottom; }
-  readonly string root, thread, data, client, clientLabel; readonly uint pinnedHost; readonly System.Threading.EventWaitHandle showRequest; readonly JavaScriptSerializer json = new JavaScriptSerializer();
+  readonly string root, thread, data, client, clientLabel; readonly uint pinnedHost; uint streamLauncher; long streamLauncherStarted; readonly System.Threading.EventWaitHandle showRequest; readonly JavaScriptSerializer json = new JavaScriptSerializer();
   readonly Timer tick = new Timer(); System.Threading.Timer animator, presenceTimer; readonly ToolTip tip = new ToolTip();
   readonly object gate = new object(); readonly Stopwatch clock = Stopwatch.StartNew();
   Process feed; Dictionary<string,object> pending, state, view; volatile bool closing; bool fastTimer; int frameQueued, scanBusy; string feedFailure;
@@ -64,6 +64,7 @@ sealed class FloatingPulse : Form {
   protected override CreateParams CreateParams { get { CreateParams p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x80; return p; } }
   public FloatingPulse(string projectRoot, string node, string threadId,bool showOnStart=false,bool followThread=false) {
     client=Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT")??"codex";clientLabel=ClientLabel(client);if(client=="claude-code")speedMetric="characters";UInt32.TryParse(Environment.GetEnvironmentVariable("CODEX_PULSE_HOST_PID"),out pinnedHost);
+    if(client=="claude-code"&&UInt32.TryParse(Environment.GetEnvironmentVariable("CODEX_PULSE_CLAUDE_LAUNCH_PID"),out streamLauncher))try{using(Process launcherProcess=Process.GetProcessById((int)streamLauncher)){streamLauncherStarted=launcherProcess.StartTime.ToUniversalTime().Ticks;}}catch{streamLauncher=0;}
     data=Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT_DATA_DIR")??Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(projectRoot,"runtime");Directory.CreateDirectory(data);
     showRequest=new System.Threading.EventWaitHandle(false,System.Threading.EventResetMode.AutoReset,InstanceName(data)+"-show");
     panel=new PulsePanelState(showOnStart);launcher=new PulseLaunchButton();
@@ -213,11 +214,11 @@ sealed class FloatingPulse : Form {
     foreach(string allowed in new string[]{"WindowsTerminal.exe","Code.exe","powershell.exe","pwsh.exe","cmd.exe","OpenConsole.exe","conhost.exe"})if(String.Equals(name,allowed,StringComparison.OrdinalIgnoreCase))return true;
     return false;
   }
-  static HashSet<uint> ClaudeParentProcesses(){
+  static HashSet<uint> ClaudeParentProcesses(uint launcherPid){
     HashSet<uint> result=new HashSet<uint>();Dictionary<uint,uint> parents=new Dictionary<uint,uint>();List<uint> seeds=new List<uint>();
     IntPtr snapshot=CreateToolhelp32Snapshot(2,0);if(snapshot==new IntPtr(-1))return result;
     try{ProcessEntry entry=new ProcessEntry();entry.Size=(uint)Marshal.SizeOf(typeof(ProcessEntry));
-      if(Process32First(snapshot,ref entry))do{parents[entry.Pid]=entry.Parent;if(String.Equals(entry.Name,"claude.exe",StringComparison.OrdinalIgnoreCase))seeds.Add(entry.Pid);}while(Process32Next(snapshot,ref entry));
+      if(Process32First(snapshot,ref entry))do{parents[entry.Pid]=entry.Parent;if(launcherPid!=0?entry.Pid==launcherPid:String.Equals(entry.Name,"claude.exe",StringComparison.OrdinalIgnoreCase))seeds.Add(entry.Pid);}while(Process32Next(snapshot,ref entry));
       foreach(uint seed in seeds){uint current=seed;for(int depth=0;depth<24;depth++){uint parent;if(!parents.TryGetValue(current,out parent)||parent==0||parent==current)break;result.Add(parent);current=parent;}}
     }finally{CloseHandle(snapshot);}return result;
   }
@@ -316,7 +317,7 @@ sealed class FloatingPulse : Form {
         Rect bounds;if(GetWindowRect(known,out bounds)) {found.Handle=known;found.Pid=knownPid;found.Bounds=bounds;found.Visible=IsWindowVisible(known)&&!IsIconic(known);found.Probe="validated client window; minimized companion hides but collection continues";return;}
       }
       lastDiscovery=clock.Elapsed.TotalSeconds;
-      if(client=="claude-code"&&pinnedHost==0)claudeParents=ClaudeParentProcesses();
+      if(client=="claude-code"&&pinnedHost==0){uint launcher=streamLauncher;if(launcher!=0)try{using(Process process=Process.GetProcessById((int)launcher)){if(process.StartTime.ToUniversalTime().Ticks!=streamLauncherStarted)launcher=0;}}catch{launcher=0;}claudeParents=ClaudeParentProcesses(launcher);}
       Dictionary<uint,string> valid=new Dictionary<uint,string>();
       foreach(string name in client=="codex"?new string[]{"ChatGPT","Codex"}:client=="antigravity"?new string[]{"Antigravity"}:new string[]{"WindowsTerminal","Code","powershell","pwsh","cmd","OpenConsole","conhost"})foreach(Process p in Process.GetProcessesByName(name)) {
         try { string executable; if(!ownerProcesses.TryGetValue((uint)p.Id,out executable))executable=p.MainModule.FileName;
@@ -326,7 +327,7 @@ sealed class FloatingPulse : Form {
       ownerProcesses=valid;long largest=0;string probe="validPids="+valid.Count+"; ";
       EnumWindows(delegate(IntPtr h,IntPtr ignored) {
         uint pid;GetWindowThreadProcessId(h,out pid);if(!valid.ContainsKey(pid))return true;
-        if(client=="claude-code"&&pinnedHost==0&&!HasClaudeAncestor(pid)&&!HasClaudeTitle(h))return true;
+        if(client=="claude-code"&&pinnedHost==0&&!HasClaudeAncestor(pid)&&(streamLauncher!=0||!HasClaudeTitle(h)))return true;
         Rect r;if(!GetWindowRect(h,out r))return true;probe+=pid+":"+h.ToInt64()+" "+(r.Right-r.Left)+"x"+(r.Bottom-r.Top)+" visible="+IsWindowVisible(h)+" minimized="+IsIconic(h)+"; ";if(!IsWindowVisible(h))return true;
         if(IsIconic(h)) {if(found.Handle==IntPtr.Zero) {found.Pid=pid;found.Handle=h;found.Bounds=r;found.Visible=false;}return true;}
         long area=(long)(r.Right-r.Left)*(r.Bottom-r.Top);if(area>largest && r.Right-r.Left>=400 && r.Bottom-r.Top>=250) {largest=area;found.Handle=h;found.Pid=pid;found.Visible=!IsIconic(h);found.Bounds=r;}
@@ -435,7 +436,7 @@ sealed class FloatingPulse : Form {
     try {
       string directory=data; Directory.CreateDirectory(directory);
       Dictionary<string,object> report=new Dictionary<string,object>();
-      report["pid"]=Process.GetCurrentProcess().Id;report["pinnedHostPid"]=pinnedHost; report["visible"]=Visible; report["ownerProcess"]=ownerName; report["ownerHandle"]=owner.ToInt64();
+      report["pid"]=Process.GetCurrentProcess().Id;report["pinnedHostPid"]=pinnedHost;report["streamLauncherPid"]=streamLauncher; report["visible"]=Visible; report["ownerProcess"]=ownerName; report["ownerHandle"]=owner.ToInt64();
       report["left"]=Left; report["top"]=Top; report["width"]=Width; report["height"]=Height; report["paused"]=paused;
       report["ownerLeft"]=ownerRect.Left; report["ownerTop"]=ownerRect.Top; report["ownerRight"]=ownerRect.Right; report["ownerBottom"]=ownerRect.Bottom;
       report["ownerVisible"]=owner!=IntPtr.Zero && IsWindowVisible(owner); report["ownerMinimized"]=owner!=IntPtr.Zero && IsIconic(owner);

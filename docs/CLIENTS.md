@@ -55,7 +55,7 @@ npm run claude:stream -- --cwd "C:\你的项目" "介绍这个项目的结构"
 npm run claude:stream -- --cwd "C:\你的项目" --resume "替换为会话UUID" "继续解释入口文件"
 ```
 
-可用 `--model NAME` 选择模型、`--no-monitor` 只在终端流式运行。Windows 自动发现原生 `claude.exe`；npm 旧版安装可通过 `--claude-path "C:\...\@anthropic-ai\claude-code\cli.js"` 指定实际 JS 入口，由当前 Node 执行，不使用 shell 执行 `.cmd`。运行 `npm run claude:stream -- --help` 查看参数。也可从目标项目目录直接运行本插件的 `scripts/claude-stream.mjs`，或通过管道提供提示词。
+可用 `--model NAME` 选择模型、`--no-monitor` 只在终端流式运行。Windows 自动发现 PATH 中的原生 `claude.exe` 与标准 npm 全局安装位置；也可通过 `--claude-path "C:\...\@anthropic-ai\claude-code\cli.js"` 指定实际 JS 入口，由当前 Node 执行，不使用 shell 执行 `.cmd`。运行 `npm run claude:stream -- --help` 查看参数。也可从目标项目目录直接运行本插件的 `scripts/claude-stream.mjs`，或通过管道提供提示词。
 
 流事件依据 [Anthropic 官方 SDK 的 CLI 参数构造](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/_internal/transport/subprocess_cli.py) 与 [StreamEvent 定义](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/types.py)。只统计本会话主代理 `text_delta` 和 text 块的初始可见文字；事件 UUID 去重，完整 assistant/result 快照不重复计数。隐藏推理、工具 JSON、子代理内容不计入。仅在终端转发文字；监控侧 `runtime/clients/claude-code/streams/<UUID>.json` 只保存字符计数及时间桶，不写提示词、回复或原始事件。
 
