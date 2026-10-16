@@ -63,7 +63,7 @@ sealed class FloatingPulse : Form {
   protected override void SetVisibleCore(bool value) { base.SetVisibleCore(value && codexVisible); }
   protected override CreateParams CreateParams { get { CreateParams p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x80; return p; } }
   public FloatingPulse(string projectRoot, string node, string threadId,bool showOnStart=false,bool followThread=false) {
-    client=Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT")??"codex";clientLabel=ClientLabel(client);if(client=="claude-code")speedMetric="characters";UInt32.TryParse(Environment.GetEnvironmentVariable("CODEX_PULSE_HOST_PID"),out pinnedHost);
+    client=Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT")??"codex";clientLabel=ClientLabel(client);if(client=="claude-code")speedMetric="official-tps";UInt32.TryParse(Environment.GetEnvironmentVariable("CODEX_PULSE_HOST_PID"),out pinnedHost);
     if(client=="claude-code"&&UInt32.TryParse(Environment.GetEnvironmentVariable("CODEX_PULSE_CLAUDE_LAUNCH_PID"),out streamLauncher))try{using(Process launcherProcess=Process.GetProcessById((int)streamLauncher)){streamLauncherStarted=launcherProcess.StartTime.ToUniversalTime().Ticks;}}catch{streamLauncher=0;}
     data=Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT_DATA_DIR")??Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(projectRoot,"runtime");Directory.CreateDirectory(data);
     showRequest=new System.Threading.EventWaitHandle(false,System.Threading.EventResetMode.AutoReset,InstanceName(data)+"-show");
@@ -81,7 +81,7 @@ sealed class FloatingPulse : Form {
       Dictionary<string,object> saved=(Dictionary<string,object>)json.DeserializeObject(File.ReadAllText(layout));
       double? savedZoom=Num(Field(saved,"zoom")); if(savedZoom.HasValue) { zoom=ClampZoom(savedZoom.Value); ApplyDpi((uint)Math.Round(dpi*96)); }
       if(Field(saved,"motion") is bool) motion=(bool)saved["motion"];
-      string savedMetric=Convert.ToString(Field(saved,"speedMetric"));if(savedMetric=="characters"||savedMetric=="reported-tps")speedMetric=savedMetric;
+      string savedMetric=Convert.ToString(Field(saved,"speedMetric"));if(savedMetric=="characters"||savedMetric=="reported-tps"||savedMetric=="official-tps"&&client=="claude-code")speedMetric=savedMetric;
       launcher.SetDock(Convert.ToString(Field(saved,"launcherSide")),Num(Field(saved,"launcherOffset"))??.35);
       Point p=new Point(Convert.ToInt32(saved["left"]),Convert.ToInt32(saved["top"]));
       Rectangle screen=Screen.GetWorkingArea(p); Location=new Point(Math.Max(screen.Left,Math.Min(screen.Right-Width,p.X)),Math.Max(screen.Top,Math.Min(screen.Bottom-Height,p.Y)));
@@ -176,10 +176,10 @@ sealed class FloatingPulse : Form {
     if(!paused||scopeChanged) { view=state; BuildCurve();if(scopeChanged)Invalidate(); } error=failure??state["error"] as string;
     string controlError=Field(state,"controlError") as string;if(controlError!=null&&controlError!=lastControlError){lastControlError=controlError;MessageBox.Show(this,controlError,"监控范围设置未生效",MessageBoxButtons.OK,MessageBoxIcon.Information);}if(controlError==null)lastControlError=null;
   }
-  string DisplayChartMetric(){return speedMetric=="characters"?Convert.ToString(Field(view,"chartMetric")):"reported-output-tokens-per-second";}
+  string DisplayChartMetric(){return speedMetric=="official-tps"?"official-token-interval-rate":speedMetric=="characters"?Convert.ToString(Field(view,"chartMetric")):"reported-output-tokens-per-second";}
   void BuildCurve() {
     Dictionary<string,object> scope=Obj(Field(view,"scope"));string metric=DisplayChartMetric()+":"+Convert.ToString(Field(scope,"mode"))+":"+Convert.ToString(Field(scope,"threadId"))+":"+Convert.ToString(Field(scope,"startedAt"));if(metric!=lastGraphMetric){lastGraphMetric=metric;dotX=0;smoothScale=1;}
-    curve=new List<double[]>(); IEnumerable raw=Field(view,speedMetric=="characters"?"points":"reportedPoints") as IEnumerable; if(raw==null) return;
+    curve=new List<double[]>(); IEnumerable raw=Field(view,speedMetric=="official-tps"?"officialPoints":speedMetric=="characters"?"points":"reportedPoints") as IEnumerable; if(raw==null) return;
     foreach(object item in raw) { Dictionary<string,object> p=Obj(item); double? rate=Num(Field(p,"rate")), time=Num(Field(p,"time"));
       if(rate.HasValue && time.HasValue) curve.Add(new double[]{time.Value,rate.Value}); }
   }
@@ -203,6 +203,13 @@ sealed class FloatingPulse : Form {
   internal static float PlotX(double sampleTime,double now) {return 14+(float)((sampleTime-(now-120000))/120000)*580;}
   static double UnixNow() {return (DateTime.UtcNow-new DateTime(1970,1,1)).TotalMilliseconds;}
   double? DataAge() {double? observed=Num(Field(view,"observedAt"));double now=paused?(Num(Field(view,"now"))??UnixNow()):UnixNow();return observed.HasValue?(double?)Math.Max(0,(now-observed.Value)/1000):null;}
+  internal static double? OfficialTokenRate(Dictionary<string,object> value){
+    if(!Convert.ToBoolean(Field(value,"exactCounts")??false))return null;
+    string status=Convert.ToString(Field(value,"status"));double? rate=Num(Field(value,status=="live"?"rate":status=="completed"||status=="completion-only"?"responseRate":"unavailable"));
+    return rate.HasValue&&!Double.IsNaN(rate.Value)&&!Double.IsInfinity(rate.Value)&&rate.Value>=0?rate:null;
+  }
+  internal static string OfficialTokenCaption(Dictionary<string,object> value){string status=Convert.ToString(Field(value,"status"));return status=="live"?"官方流区间 TPS":status=="completed"||status=="completion-only"?"本次响应均速":"官方 Token TPS";}
+  internal static string OfficialTokenText(Dictionary<string,object> value){double? rate=OfficialTokenRate(value);if(rate.HasValue)return rate.Value.ToString("0.0",CultureInfo.InvariantCulture)+" TPS";string status=Convert.ToString(Field(value,"status"));return status=="select-session"?"请选择会话":status=="counter-error"?"计数异常":status=="disconnected"||status=="unsupported"?"未连接":"待Token上报";}
   internal static bool IsCodexPath(string value) { return value!=null && (value.IndexOf("\\WindowsApps\\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)>=0 || (value.IndexOf("\\OpenAI\\Codex\\",StringComparison.OrdinalIgnoreCase)>=0 && value.IndexOf("\\bin\\",StringComparison.OrdinalIgnoreCase)<0)); }
   internal static string ClientLabel(string client){if(client=="codex")return "Codex";if(client=="claude-code")return "Claude Code";if(client=="antigravity")return "Antigravity";throw new ArgumentException("Unsupported client");}
   internal static string RuntimeDirectory(string project){return Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT_DATA_DIR")??Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(project,"runtime");}
@@ -249,7 +256,7 @@ sealed class FloatingPulse : Form {
     // Deactivation is delivered before a click on the settings button reaches us.
     if(clock.Elapsed.TotalSeconds-settingsClosedAt<.18)return;
     Dictionary<string,object> scope=Obj(Field(state,"scope"));bool all=Convert.ToString(Field(scope,"mode"))=="all";
-    PulseSettingsPopup popup=new PulseSettingsPopup(all?"整个 "+clientLabel+" · 本次监控":clientLabel+" · 指定对话",(int)Math.Round(zoom*100),motion,CompanionEnabled(),speedMetric);settingsPopup=popup;
+    PulseSettingsPopup popup=new PulseSettingsPopup(all?"整个 "+clientLabel+" · 本次监控":clientLabel+" · 指定对话",(int)Math.Round(zoom*100),motion,CompanionEnabled(),speedMetric,client=="claude-code");settingsPopup=popup;
     popup.MetricChanged+=delegate(string metric){speedMetric=metric;BuildCurve();SaveLayout();Invalidate();};
     popup.ScopeRequested+=delegate {BeginInvoke((MethodInvoker)ConfigureScope);};
     popup.SizeRequested+=delegate {BeginInvoke((MethodInvoker)ConfigureSize);};
@@ -358,9 +365,11 @@ sealed class FloatingPulse : Form {
     bool partial=(all||client!="codex")&&((Num(Field(scope,"readErrors"))??0)>0||(Num(Field(scope,"missingDetails"))??0)>0||(Num(Field(scope,"loading"))??0)>0);
     WriteText(g,all?(partial?"全局本次 Token*":"全局本次 Token"):partial?"单对话 Token*":"单对话 Token",28,7,muted,small); WriteText(g,total.HasValue?total.Value.ToString("N0",CultureInfo.InvariantCulture):"—",28,24,Color.White,regular);
     Dictionary<string,object> live=Obj(Field(view,"liveOutput"));bool liveReady=DisplayChartMetric()=="visible-characters-per-second";
+    Dictionary<string,object> official=Obj(Field(view,"officialTokenOutput"));bool tokenMode=speedMetric=="official-tps";
     double? rate=Num(Field(view,"latestRate")),visibleRate=Num(Field(live,"rate")); string speed=liveReady&&visibleRate.HasValue?visibleRate.Value.ToString("0.0",CultureInfo.InvariantCulture)+" 字/s":fresh&&rate.HasValue ? rate.Value.ToString("0.0",CultureInfo.InvariantCulture)+" TPS" : "待上报";
-    WriteText(g,liveReady?"实时可见输出":"输出 TPS · 上报均速",157,7,muted,small); WriteText(g,speed,157,24,liveReady||fresh?mint:muted,regular);
-    WriteText(g,client=="codex"?"5h 剩余":"实时字速",308,7,muted,small); WriteText(g,client=="codex"?Remaining(limits,"primary"):Convert.ToBoolean(Field(live,"connected")??false)&&visibleRate.HasValue?visibleRate.Value.ToString("0.0",CultureInfo.InvariantCulture)+" 字/s":"未连接",308,24,Color.White,regular);
+    WriteText(g,tokenMode?OfficialTokenCaption(official):liveReady?"实时可见输出":"输出 TPS · 上报均速",157,7,muted,small); WriteText(g,tokenMode?OfficialTokenText(official):speed,157,24,tokenMode?OfficialTokenRate(official).HasValue?mint:muted:liveReady||fresh?mint:muted,regular);
+    bool extraTokens=client=="claude-code"&&!tokenMode;
+    WriteText(g,client=="codex"?"5h 剩余":extraTokens?"官方流 TPS":"实时字速",308,7,muted,small); WriteText(g,client=="codex"?Remaining(limits,"primary"):extraTokens?OfficialTokenText(official):Convert.ToBoolean(Field(live,"connected")??false)&&visibleRate.HasValue?visibleRate.Value.ToString("0.0",CultureInfo.InvariantCulture)+" 字/s":"未连接",308,24,Color.White,regular);
     WriteText(g,client=="codex"?"周剩余":"账户额度",423,7,muted,small); WriteText(g,client=="codex"?Remaining(limits,"secondary"):"未提供",423,24,Color.White,regular);
     WriteText(g,paused?"▶":"Ⅱ",555,17,muted,regular); WriteText(g,"×",584,17,muted,regular);
     DrawSettingsButton(g,Unit,settingsHovered,settingsFont);
@@ -425,7 +434,12 @@ sealed class FloatingPulse : Form {
       using(Brush halo=new SolidBrush(Color.FromArgb((int)(28+wave*35),mint))) g.FillEllipse(halo,(float)dotX-radius,(float)dotY-radius,radius*2,radius*2);
       using(Brush b=new SolidBrush(mint)) g.FillEllipse(b,(float)dotX-2.7f,(float)dotY-2.7f,5.4f,5.4f);
     }
-    if(points.Count==0) WriteText(g,"等待新的用量记录",205,74,muted,small);
+    if(points.Count==0) WriteText(g,speedMetric=="official-tps"?"等待官方 Token 增量":"等待新的用量记录",205,74,muted,small);
+    if(speedMetric=="official-tps"){
+      Dictionary<string,object> official=Obj(Field(view,"officialTokenOutput"));string status=Convert.ToString(Field(official,"status"));double? interval=Num(Field(official,"intervalSeconds"));
+      string detail=status=="live"?"上报区间 "+(interval??0).ToString("0.00",CultureInfo.InvariantCulture)+"s":status=="completion-only"?"上游仅在结束时报告 Token":status=="completed"?"已结束 · 本次响应均速":status=="select-session"?"官方流 TPS 请选单个会话":"等待生成中的 Token 计数";
+      WriteText(g,clientLabel+" · 官方 Token 流",14,48,muted,small);WriteText(g,detail,205,48,muted,small);return;
+    }
     bool liveReady=DisplayChartMetric()=="visible-characters-per-second";
     Dictionary<string,object> scope=Obj(Field(view,"scope"));bool all=Convert.ToString(Field(scope,"mode"))=="all";string connection=all?"全局 "+Convert.ToString(Field(scope,"connectedStreams"))+"路"+(Convert.ToString(Field(scope,"discovering"))=="True"?" 发现中":(Num(Field(scope,"unavailableStreams"))??0)>0?" 部分":"")+" · 字/s":"本机事件流 · 字/s";
     double? age=DataAge(); WriteText(g,client!="codex"?clientLabel+(liveReady?" · 实时字/s":speedMetric=="characters"?" · 文字流未连接，回退 TPS":" · 120s 上报 TPS"):liveReady?connection:all?"全局 · 上报 TPS（120s窗口）":speedMetric=="characters"?"文字流断开 · 回退上报 TPS":"输出 TPS · 上报区间均速",14,48,muted,small); WriteText(g,error??(age.HasValue?"用量 "+age.Value.ToString("0")+"s前":"等候回报"),477,48,muted,small);
@@ -443,13 +457,14 @@ sealed class FloatingPulse : Form {
       report["actualOwnerHandle"]=GetWindow(Handle,4).ToInt64();
       report["dpiScale"]=dpi;report["zoom"]=zoom;report["motion"]=motion;report["hostReady"]=hostReady;report["hostPid"]=hostPid;report["hostScanMs"]=scanMs;report["hostProbe"]=hostProbe;report["feedSuspended"]=feedSuspended; report["renderFps"]=fps;
       double? observed=Num(Field(state,"observedAt"));
-      report["version"]="0.10.0";report["client"]=client;report["clientLabel"]=clientLabel;report["capabilities"]=Field(state,"capabilities");report["fastAnimation"]=fastTimer;report["observedAt"]=observed;report["dataAgeSeconds"]=observed.HasValue?(object)Math.Max(0,((DateTime.UtcNow-new DateTime(1970,1,1)).TotalMilliseconds-observed.Value)/1000):null;report["lastActivity"]=Field(state,"lastActivity");
+      report["version"]="0.11.0";report["client"]=client;report["clientLabel"]=clientLabel;report["capabilities"]=Field(state,"capabilities");report["fastAnimation"]=fastTimer;report["observedAt"]=observed;report["dataAgeSeconds"]=observed.HasValue?(object)Math.Max(0,((DateTime.UtcNow-new DateTime(1970,1,1)).TotalMilliseconds-observed.Value)/1000):null;report["lastActivity"]=Field(state,"lastActivity");
       report["placement"]= "codex-window-layer";report["topMost"]=TopMost;report["nativeTopMost"]=IsNativeTopMost(Handle);report["layerAligned"]=layerAligned;
       report["threadId"]=Field(state,"selectedId");report["launchThreadId"]=thread;report["scope"]=Field(state,"scope");report["catalogCount"]=chatChoices.Count;report["usage"]=Field(state,"usage");report["limits"]=Field(state,"limits"); report["checkedAt"]=DateTime.UtcNow.ToString("o"); report["error"]=error;
       report["totalTokens"]=Field(Obj(Field(state,"usage")),"total_tokens"); report["rate"]=Field(state,"latestRate");
       report["displayedTotalTokens"]=Field(Obj(Field(view,"usage")),"total_tokens");
       report["sampledAt"]=Field(state,"now");report["plotSpanSeconds"]=120;report["chartNow"]=paused?Field(view,"now"):(object)UnixNow();report["lastPointPlotX"]=curve.Count>0?(object)PlotX(curve[curve.Count-1][0],UnixNow()):null;
-      double? displayedAge=DataAge();report["displayedRate"]=DisplayChartMetric()=="visible-characters-per-second"?Field(Obj(Field(view,"liveOutput")),"rate"):error==null&&displayedAge.HasValue&&displayedAge.Value<=15?Field(view,"latestRate"):null;
+      double? displayedAge=DataAge();report["displayedRate"]=speedMetric=="official-tps"?(object)OfficialTokenRate(Obj(Field(view,"officialTokenOutput"))):DisplayChartMetric()=="visible-characters-per-second"?Field(Obj(Field(view,"liveOutput")),"rate"):error==null&&displayedAge.HasValue&&displayedAge.Value<=15?Field(view,"latestRate"):null;
+      report["officialTokenOutput"]=Field(state,"officialTokenOutput");report["officialTokenCaption"]=OfficialTokenCaption(Obj(Field(view,"officialTokenOutput")));
       report["liveOutput"]=Field(state,"liveOutput");report["chartMetric"]=DisplayChartMetric();report["speedMetric"]=speedMetric;
       report["settingsOpen"]=settingsPopup!=null&&!settingsPopup.IsDisposed;
       report["panelExpanded"]=panel.Expanded;report["launcherVisible"]=launcher.Visible;report["launcherHandle"]=launcher.Handle.ToInt64();report["launcherAligned"]=launcherAligned;report["launcherNativeTopMost"]=IsNativeTopMost(launcher.Handle);
@@ -562,7 +577,7 @@ sealed class PulseSettingsPopup : Form {
   readonly Button sizeButton;bool updating;
   internal string DismissReason {get;private set;}
   static readonly Color ink=Color.FromArgb(229,241,244),muted=Color.FromArgb(145,169,182),accent=Color.FromArgb(145,239,202);
-  internal PulseSettingsPopup(string scope,int scale,bool motion,bool companion,string metric) {
+  internal PulseSettingsPopup(string scope,int scale,bool motion,bool companion,string metric,bool officialTokenMode=false) {
     Text="Codex Pulse 设置";FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;TopMost=false;StartPosition=FormStartPosition.Manual;
     AutoScaleMode=AutoScaleMode.None;ClientSize=new Size(338,494);BackColor=Color.FromArgb(18,28,43);ForeColor=ink;
     Font=body;DoubleBuffered=true;
@@ -578,8 +593,9 @@ sealed class PulseSettingsPopup : Form {
     }
     SetScale(scale);
     AddLabel("速度指标",21,247,180,20,caption,muted);
-    Button tps=null,characters=null;Action<string> choose=delegate(string value){tps.BackColor=value=="reported-tps"?Color.FromArgb(40,98,89):Color.FromArgb(28,43,61);characters.BackColor=value=="characters"?Color.FromArgb(40,98,89):Color.FromArgb(28,43,61);if(MetricChanged!=null)MetricChanged(value);};
-    tps=AddButton("TPS · 上报均速",18,273,147,30,delegate {choose("reported-tps");});characters=AddButton("字/秒 · 实时文字",173,273,147,30,delegate {choose("characters");});choose(metric);
+    Button tps=null,characters=null,official=null;Action<string> choose=delegate(string value){if(official!=null)official.BackColor=value=="official-tps"?Color.FromArgb(40,98,89):Color.FromArgb(28,43,61);tps.BackColor=value=="reported-tps"?Color.FromArgb(40,98,89):Color.FromArgb(28,43,61);characters.BackColor=value=="characters"?Color.FromArgb(40,98,89):Color.FromArgb(28,43,61);if(MetricChanged!=null)MetricChanged(value);};
+    if(officialTokenMode){official=AddButton("官方流 TPS",18,273,98,30,delegate {choose("official-tps");});tps=AddButton("日志 TPS",122,273,94,30,delegate {choose("reported-tps");});characters=AddButton("字/秒",222,273,98,30,delegate {choose("characters");});}
+    else{tps=AddButton("TPS · 上报均速",18,273,147,30,delegate {choose("reported-tps");});characters=AddButton("字/秒 · 实时文字",173,273,147,30,delegate {choose("characters");});}choose(metric);
     CheckBox motionToggle=AddToggle("动态流光背景",18,322,motion);motionToggle.CheckedChanged+=delegate {if(MotionChanged!=null)MotionChanged(motionToggle.Checked);};
     AddLabel("关闭后使用静态背景",44,349,270,17,caption,muted);
     companionToggle=AddToggle("登录后自动伴随当前客户端",18,375,companion);companionToggle.CheckedChanged+=delegate {if(!updating&&CompanionChanged!=null)CompanionChanged(companionToggle.Checked);};

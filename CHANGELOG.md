@@ -1,5 +1,12 @@
 # 变更记录
 
+## 0.11.0 · 官方 Token 流计数
+
+- Claude 流适配器接入官方 `message_start` / `message_delta` 的累计 output_tokens，按真实计数差分和接收时间计算区间 TPS；不从文字或事件数量推算 Token。
+- 浮条新增官方流 TPS 选项，区分生成中增量、结束均速、等待、断流、计数异常与单会话限制；既有字速和日志 TPS 保留。
+- 增加官方示例事件顺序回归、累计差分/去重/回退/过期/会话隔离测试与子进程链路；Windows 启动测试验证等待、40 TPS、中途/结束标签及过期不再显示旧速率。
+- 当前 Anthropic 普通流示例只在结束时报告用量，Antigravity 连续计数源仍未验证，本版不承诺通用逐 Token 实时监测。详细证据和状态见 docs/CLIENTS.md。
+
 ## 0.10.0 · Claude 流式速度
 
 - 新增 `claude:stream`，通过已安装的 Claude CLI 增量事件显示实时 Unicode 字/秒；支持项目目录、模型选择、继续会话和管道提示词。

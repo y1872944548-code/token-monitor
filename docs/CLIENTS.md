@@ -63,6 +63,28 @@ npm run claude:stream -- --cwd "C:\你的项目" --resume "替换为会话UUID" 
 
 这个入口不自动下载 Claude、不修改 Claude 配置、不代替工具审批，也不在安装/检查阶段发送模型请求。Linux 可使用 `--no-monitor` 测试 CLI 接入；Windows 浮条不因此覆盖 WSL。
 
+### 官方 Token 流 TPS（0.11.0）
+
+同一个 `claude:stream` 入口新增官方 `message_start.message.usage.output_tokens` 与 `message_delta.usage.output_tokens` 采集。它们是累计计数，必须差分而非相加；语义见 [Anthropic SDK 固定版本类型定义](https://github.com/anthropics/anthropic-sdk-typescript/blob/04a4c28c70de498d6d0e930e43edb5edb9ac545e/src/resources/messages/messages.ts#L4768) 与 [官方流累加实现](https://github.com/anthropics/anthropic-sdk-typescript/blob/04a4c28c70de498d6d0e930e43edb5edb9ac545e/src/lib/MessageStream.ts#L641)。官方也明确说明 output_tokens 并不与可见文字一一对应，空回复也可能产生输出 Token。
+
+Claude 浮条新增“官方流 TPS / 日志 TPS / 字/秒”三个选项。新安装默认官方流 TPS，已有速度偏好保留。只有指定单会话才能查看官方流 TPS；全局的不同响应没有共同采样区间，不把单个响应的速度冒充全局。
+
+| 状态 | 浮条显示 | 含义 |
+| --- | --- | --- |
+| `waiting` | 待Token上报 | 有文字或起始计数也不推算尚未上报的 Token |
+| `live` | 官方流区间 TPS | 生成结束前收到累计计数增长：增量 Token / 相邻计数接收间隔 |
+| `completion-only` | 本次响应均速 | 只在结束收到新计数：最终输出 Token / 首个 message_start 至最终用量的接收时长 |
+| `completed` | 本次响应均速 | 此响应曾有中途计数，目前已结束；结束均速保留 30 秒 |
+| `counter-error` | 计数异常 | 官方计数回退、非整数或溢出，停止此响应的速度计算 |
+| `select-session` | 请选择会话 | 官方流 TPS 需要单会话范围 |
+| `disconnected` | 未连接 | 计数流或有效观测过期 |
+
+生成中的增量观测超过 3 秒未更新便恢复等待，不持续把旧 TPS 当作新采样。回复、工具调用或重试切换至新 message ID 后重建基线；完整 assistant/result 消息不再次加入 Token。流计数只服务于速度，不叠加进日志累计。流文件新增的字段仍只有数字、时间与状态，不保存文本。
+
+**精确的是官方计数，时间使用本机收到事件的时间；网络缓冲与事件打包会影响观测区间，不能称为服务端纯生成性能或逐 Token 时间。** 官方 [basic_response 示例](https://github.com/anthropics/anthropic-sdk-typescript/blob/04a4c28c70de498d6d0e930e43edb5edb9ac545e/tests/lib/fixtures/basic_response.txt) 有三个文字增量，但只有起始与结束用量，属于 `completion-only`。本项目将其精简为无正文的事件顺序回归，保证不会因文字持续到达就宣称精确实时 Token 已可用。支持中途 usage 的代码路径已实现并用合成协议测试，但没有真实 Claude 连续计数的验收证据，不能据此承诺官方客户端普遍支持逐 Token 报告。
+
+这一接入不新增模型请求、计数 API 轮询、凭据读取、TLS 解密或客户端修改。Antigravity 目前没有已验证的连续官方 Token 源，诊断状态为 `unsupported`。
+
 ## Antigravity（实验性）
 
 按 Google 官方 Windows 客户端 `Antigravity.exe` 识别窗口。读取 `~/.gemini/antigravity/*.db` 与 `conversations/*.db` 中 UUID 命名的会话数据库；`GEMINI_CLI_HOME` 替换 `.gemini` 根目录，或用 `CODEX_PULSE_ANTIGRAVITY_HOME` 直接指定 Antigravity 数据目录。
@@ -97,3 +119,5 @@ npm run diagnose:clients
 输出系统/Node 版本、会话数量、是否发现兼容用量、覆盖状态和读取错误数量。导出不包含完整路径、聊天 ID、正文、凭据或账户用量数值。如果 Antigravity 显示当前记录格式未支持，保留这个诊断结果即可定位下一步适配，不能用零用量替代。
 
 Claude 生成期间可另开终端执行诊断；`liveTextConnected: true` 与 `streamCoverage: "available"` 表示文字计数流已连接。流尚未结束时，`compatibleUsageFound` 仍可能为 false，表示官方用量尚未进入日志；两者是不同状态。生成结束后连接状态自然回落。计数读取异常看 `streamReadErrors`。
+
+`officialTokenSource` 标明官方计数源，`tokenCadence` 区分上表中的采样状态，`tokenCounterErrors` 为计数异常次数。诊断不导出 Token 数值；MCP 摘要和浮条状态的 `officialTokenOutput` 提供当前精确计数、观测区间与速度，不能只根据 `exactCounts: true` 宣称持续实时——还要查看 `status`。

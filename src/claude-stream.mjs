@@ -1,9 +1,11 @@
+import { OfficialTokenStream } from './official-token-stream.mjs';
 // Claude stream-json adapter. Only visible text deltas are counted; assistant
 // snapshots, thinking, tools and subagent output never enter the speed metric.
 export class ClaudeTextStream {
   constructor(sessionId, now = Date.now) {
     this.sessionId = sessionId; this.now = now; this.seen = new Set();
     this.blocks = new Set(); this.characters = 0; this.buckets = []; this.lastTextAt = null;
+    this.tokens = new OfficialTokenStream(now);
   }
   accept(record) {
     if (record?.session_id !== this.sessionId || record.parent_tool_use_id != null) return '';
@@ -12,6 +14,7 @@ export class ClaudeTextStream {
     this.seen.add(record.uuid);
     if (this.seen.size > 10000) this.seen.delete(this.seen.values().next().value);
     const event = record.event;
+    this.tokens.accept(event);
     if (event.type === 'message_start' || event.type === 'message_stop') this.blocks.clear();
     if (!Number.isSafeInteger(event.index) || event.index < 0 || event.index > 10000) return '';
     let text = '';
@@ -29,8 +32,8 @@ export class ClaudeTextStream {
   }
   snapshot(ended = false) {
     const now = this.now(); this.buckets = this.buckets.filter(row => row.time > now - 2000);
-    return { format: 1, client: 'claude-code', sessionId: this.sessionId, updatedAt: now, ended,
-      characters: this.characters, lastTextAt: this.lastTextAt, buckets: this.buckets };
+    return { format: 2, client: 'claude-code', sessionId: this.sessionId, updatedAt: now, ended,
+      characters: this.characters, lastTextAt: this.lastTextAt, buckets: this.buckets, officialTokens: this.tokens.snapshot() };
   }
 }
 

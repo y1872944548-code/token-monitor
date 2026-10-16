@@ -10,6 +10,7 @@ for (const client of ['claude-code', 'antigravity']) {
     clients.push({ client, localSessions: monitor.catalog.entries.length, compatibleUsageFound: value.capabilities.tokens,
       coverage: value.scope.coverage, readErrors: value.scope.readErrors, unsupportedFiles: value.capabilities.unsupportedFiles,
       liveTextConnected: value.liveOutput?.connected || false, streamCoverage: value.scope.streamCoverage, streamReadErrors: value.scope.streamReadErrors,
+      officialTokenSource: value.officialTokenOutput?.source || null, tokenCadence: value.officialTokenOutput?.status || 'unsupported', tokenCounterErrors: value.officialTokenOutput?.counterErrors || 0,
       supportedFormat: client === 'claude-code' ? 'projects/<project>/<session>.jsonl' : 'gen_metadata SQLite with embedded generation timestamp' });
   } finally { monitor.close(); }
 }

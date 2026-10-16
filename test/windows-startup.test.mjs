@@ -64,19 +64,31 @@ timer.Start();Application.Run(form);}}}`);
       if (client === 'claude-code') {
         await writeFile(control, 'minimize'); await wait(async () => { const value = await state(data); return value?.ownerMinimized && !value.visible && !value.feedSuspended; });
         await writeFile(control, 'restore'); await wait(async () => (await state(data))?.visible);
-        let writing = Promise.resolve();
+        let writing = Promise.resolve(), tokenPhase = 'waiting';
         const publish = ended => {
           const now = Date.now();
-          writing = writing.then(() => writeStreamState(path.join(data, 'streams'), { format: 1, client, sessionId: session, updatedAt: now, ended,
-            characters: 20, lastTextAt: ended ? now - 3000 : now, buckets: ended ? [] : [{ time: Math.floor(now / 100) * 100, count: 20 }] }));
+          const complete = tokenPhase === 'final' || tokenPhase === 'stale', stamp = tokenPhase === 'stale' ? now - 31000 : now;
+          const officialTokens = tokenPhase === 'waiting' ? { source: 'anthropic-stream-usage', startedAt: now - 2000, observedAt: now - 2000,
+            outputTokens: 1, interval: null, completed: false, finalTokens: null, finalAt: null, midstreamUpdates: 0, counterErrors: 0, invalid: false } : {
+            source: 'anthropic-stream-usage', startedAt: stamp - 2000, observedAt: stamp, outputTokens: complete ? 80 : 40,
+            interval: { from: stamp - 1000, to: stamp, tokens: 40, final: complete }, completed: complete,
+            finalTokens: complete ? 80 : null, finalAt: complete ? stamp : null, midstreamUpdates: 1, counterErrors: 0, invalid: false };
+          writing = writing.then(() => writeStreamState(path.join(data, 'streams'), { format: 2, client, sessionId: session, updatedAt: now, ended,
+            characters: 20, lastTextAt: ended ? now - 3000 : now, buckets: ended ? [] : [{ time: Math.floor(now / 100) * 100, count: 20 }], officialTokens }));
           return writing;
         };
         await publish(false); const heartbeat = setInterval(() => { void publish(false); }, 200);
         try {
-          await wait(async () => { const value = await state(data); return value?.liveOutput?.connected && value.chartMetric === 'visible-characters-per-second' && value.displayedRate === 10; });
+          await wait(async () => { const value = await state(data); return value?.liveOutput?.connected && value.liveOutput.rate === 10 && value.officialTokenOutput?.status === 'waiting'; });
+          assert.equal((await state(data)).displayedRate, null, 'text alone must not become exact TPS');
+          tokenPhase = 'live'; await publish(false);
+          await wait(async () => { const value = await state(data); return value?.officialTokenOutput?.status === 'live' && value.chartMetric === 'official-token-interval-rate' && value.displayedRate === 40; });
+          assert.equal((await state(data)).officialTokenCaption, '官方流区间 TPS');
           assert.equal((await state(data)).usage.total_tokens, 120, 'stream characters must not inflate official tokens');
-        } finally { clearInterval(heartbeat); await writing; await publish(true); }
-        await wait(async () => (await state(data))?.chartMetric === 'reported-output-tokens-per-second');
+          tokenPhase = 'final'; await publish(true);
+          await wait(async () => { const value = await state(data); return value?.officialTokenOutput?.status === 'completed' && value.officialTokenCaption === '本次响应均速' && value.displayedRate === 40; });
+        } finally { clearInterval(heartbeat); await writing; tokenPhase = 'stale'; await publish(true); }
+        await wait(async () => (await state(data))?.displayedRate === null);
         assert.equal(JSON.parse(await readFile(path.join(data, 'monitor-settings.json'), 'utf8')).threadId, savedId, 'stream launch preserves saved scope');
       }
       // Reopening this client must reuse its own instance and leave the other one alive.

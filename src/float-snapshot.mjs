@@ -24,7 +24,8 @@ export async function sampleFloat({ threadId, codexHome, client = clientId(), da
     await monitor.tick(); const value = monitor.snapshot(); monitor.close();
     return { ...value, presentation: 'desktop-float', window,
       ...(window ? { selectedId: window.threadId, usage: window.usage, limits: window.limits, observedAt: window.observedAt, ageSeconds: window.dataAgeSeconds, latestRate: window.rate, scope: window.scope,
-        ...(window.liveOutput ? { liveOutput: window.liveOutput } : {}), ...(window.capabilities ? { capabilities: window.capabilities } : {}) } : {}) };
+        ...(window.liveOutput ? { liveOutput: window.liveOutput } : {}), ...(window.officialTokenOutput ? { officialTokenOutput: window.officialTokenOutput } : {}),
+        ...(window.capabilities ? { capabilities: window.capabilities } : {}) } : {}) };
   }
   const catalog = new ThreadCatalog(codexHome ? { home: codexHome } : {});
   await catalog.refresh(true);
@@ -43,7 +44,7 @@ export async function sampleFloat({ threadId, codexHome, client = clientId(), da
     if (candidate?.scope && (!candidate.client || candidate.client === 'codex') && age >= 0 && age < 5000 && matches) window = candidate;
   } catch {}
   return {
-    kind: 'codex-pulse', version: '0.10.0', client: 'codex', presentation: 'desktop-float',
+    kind: 'codex-pulse', version: '0.11.0', client: 'codex', presentation: 'desktop-float',
     selectedId: window ? window.threadId : value.selectedId,
     usage: window ? window.usage : value.usage,
     limits: window ? window.limits : value.limits,

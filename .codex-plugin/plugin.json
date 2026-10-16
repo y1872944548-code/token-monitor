@@ -1,6 +1,6 @@
 {
   "name": "codex-pulse",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "本机原生浮条，监控 Codex、Claude Code 和 Antigravity 的已上报用量。",
   "interface": {
     "displayName": "AI 客户端监控浮条",

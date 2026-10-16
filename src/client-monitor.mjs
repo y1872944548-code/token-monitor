@@ -31,7 +31,7 @@ export class ClientMonitor {
     this.catalog = { entries: [], restricted: false, publicList: () => this.catalog.entries.map(({ id, modifiedAt }) => ({ id, title: CLIENTS[this.client] + ' · ' + id.slice(0, 8), modifiedAt })) };
     this.files = new Map(); this.lastDiscover = 0; this.readErrors = 0; this.discoveryErrors = 0; this.partial = false; this.enabled = true; this.controlError = null;
     this.points = []; this.messageCount = 0; this.pendingFiles = 0;
-    this.livePoints = []; this.live = client === 'claude-code' ? new ClaudeLiveReader(path.join(dataDir, 'streams'), now) : null;
+    this.livePoints = []; this.officialPoints = []; this.live = client === 'claude-code' ? new ClaudeLiveReader(path.join(dataDir, 'streams'), now) : null;
   }
   async initialize() {
     if (this.settingsFile) try {
@@ -83,7 +83,7 @@ export class ClientMonitor {
     await this.discover();
     if (!['thread', 'all'].includes(mode) || !isId(threadId) || (mode === 'thread' && !this.catalog.entries.some(x => x.id === threadId))) throw new Error('未找到所选客户端的会话');
     const next = { mode, threadId, globalStartedAt: mode === 'all' && (resetGlobal || !this.config.globalStartedAt) ? this.now() : this.config.globalStartedAt };
-    await this.persist(next); this.config = next; this.points = []; this.livePoints = []; this.controlError = null;
+    await this.persist(next); this.config = next; this.points = []; this.livePoints = []; this.officialPoints = []; this.controlError = null;
   }
   accept(state, record) {
     if (!record) return;
@@ -190,17 +190,25 @@ export class ClientMonitor {
     const latestRate = known && usage?.total_tokens !== null ? rows.filter(x => x.time > now - 120000).reduce((sum, x) => sum + x.usage.output_tokens, 0) / 120 : null;
     if (latestRate !== null && (!this.points.length || now - this.points.at(-1).time >= 500)) { this.points.push({ time: now, rate: latestRate }); if (this.points.length > 250) this.points.shift(); }
     const liveOutput = this.live?.snapshot(this.config), liveReady = liveOutput?.connected && liveOutput.synchronized;
+    const officialTokenOutput = liveOutput?.officialTokens || { source: null, exactCounts: false, rate: null, responseRate: null, status: 'unsupported' };
+    const officialRate = officialTokenOutput.rate ?? officialTokenOutput.responseRate;
+    if (officialRate !== null && (!this.officialPoints.length || this.officialPoints.at(-1).time !== officialTokenOutput.observedAt)) {
+      this.officialPoints.push({ time: officialTokenOutput.observedAt, rate: officialRate });
+    }
+    this.officialPoints = this.officialPoints.filter(row => row.time > now - 120000).slice(-250);
     if (liveReady || this.livePoints.length) {
       this.livePoints.push({ time: now, rate: liveReady ? liveOutput.rate : 0 });
       this.livePoints = this.livePoints.filter(row => row.time > now - 120000).slice(-250);
     }
     const error = liveReady && !known ? null : !this.catalog.entries.length ? this.unsupportedFiles ? '当前记录格式未支持' : '等待本机会话' : !known ? '尚无兼容用量' : partial ? '用量不完整' : null;
-    return { kind: 'codex-pulse', version: '0.10.0', client: this.client, clientLabel: CLIENTS[this.client], now,
+    return { kind: 'codex-pulse', version: '0.11.0', client: this.client, clientLabel: CLIENTS[this.client], now,
       selectedId: this.config.mode === 'all' ? null : this.config.threadId, usage, limits: null, observedAt,
       ageSeconds: observedAt === null ? null : Math.max(0, (now - observedAt) / 1000), latestRate, rateIntervalSeconds: 120,
       points: liveReady ? this.livePoints : this.points, reportedPoints: this.points, chartMetric: liveReady ? 'visible-characters-per-second' : 'reported-output-tokens-per-second',
-      ...(liveOutput ? { liveOutput } : {}),
-      sourceLabel: liveReady ? 'Claude stream-json · 实时字/s' : '本机记录 · 120s 上报均速', capabilities: { tokens: known, visibleCharacters: !!liveReady, accountLimits: false, experimental: this.client === 'antigravity', unsupportedFiles: this.unsupportedFiles },
+      ...(liveOutput ? { liveOutput } : {}), officialTokenOutput, officialPoints: this.officialPoints,
+      sourceLabel: liveReady ? 'Claude stream-json · 实时字/s' : '本机记录 · 120s 上报均速', capabilities: { tokens: known, visibleCharacters: !!liveReady,
+        officialStreamTokens: officialTokenOutput.exactCounts, streamingTokenRate: officialTokenOutput.status === 'live', tokenCadence: officialTokenOutput.status,
+        accountLimits: false, experimental: this.client === 'antigravity', unsupportedFiles: this.unsupportedFiles },
       status: liveReady ? 'running' : 'unknown', lastActivity: Math.max(observedAt || 0, liveOutput?.lastTextAt || 0) || null, error, controlError: this.controlError,
       scope: { ...this.config, startedAt: this.config.globalStartedAt, client: this.client, indexAvailable: true,
         readErrors: this.readErrors + this.discoveryErrors, missingDetails: partial ? 1 : 0, loading: this.pendingFiles, catalogThreads: this.catalog.entries.length,

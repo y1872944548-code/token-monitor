@@ -1,6 +1,7 @@
 import { readdir, open, realpath, stat, mkdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { isId, insideRoots } from './thread-catalog.mjs';
+import { tokenDisplay, validTokenState } from './official-token-stream.mjs';
 
 const MAX_FILES = 128, MAX_BYTES = 8192;
 export async function writeStreamState(directory, state) {
@@ -24,7 +25,7 @@ export class ClaudeLiveReader {
     const candidates = [];
     for (const entry of names.slice(0, 4096)) try {
       const modified = (await stat(path.join(this.directory, entry.name))).mtimeMs;
-      if (modified > Date.now() - 10000) candidates.push({ name: entry.name, modified });
+      if (modified > Date.now() - 35000) candidates.push({ name: entry.name, modified });
     } catch { this.errors++; }
     this.partial = names.length > 4096 || candidates.length > MAX_FILES;
     for (const { name } of candidates.sort((a, b) => b.modified - a.modified).slice(0, MAX_FILES)) {
@@ -49,13 +50,15 @@ export class ClaudeLiveReader {
     return { connected: ready.length > 0, synchronized: ready.length > 0, connectedStreams: ready.length,
       rate: buckets.reduce((sum, row) => sum + row.count, 0) / 2, unit: 'characters/s', windowSeconds: 2,
       lastTextAt: buckets.length ? Math.max(...buckets.map(row => row.time)) : null,
-      source: 'claude-stream-json', readErrors: this.errors, partial: this.partial };
+      source: 'claude-stream-json', readErrors: this.errors, partial: this.partial,
+      officialTokens: tokenDisplay(this.rows, config, now) };
   }
 }
 function validState(row, id, now) {
   const integer = x => Number.isSafeInteger(x) && x >= 0;
-  return row?.format === 1 && row.client === 'claude-code' && row.sessionId === id && integer(row.updatedAt) && row.updatedAt <= now + 1000
+  return [1, 2].includes(row?.format) && row.client === 'claude-code' && row.sessionId === id && integer(row.updatedAt) && row.updatedAt <= now + 1000
     && typeof row.ended === 'boolean' && integer(row.characters) && (row.lastTextAt === null || integer(row.lastTextAt) && row.lastTextAt <= row.updatedAt)
     && Array.isArray(row.buckets) && row.buckets.length <= 21 && row.buckets.every((x, index) => integer(x.time) && x.time <= row.updatedAt && integer(x.count)
-      && x.count <= 1024 * 1024 && (index === 0 || x.time > row.buckets[index - 1].time));
+      && x.count <= 1024 * 1024 && (index === 0 || x.time > row.buckets[index - 1].time))
+    && (row.format === 1 ? row.officialTokens === undefined : validTokenState(row.officialTokens, row.updatedAt));
 }

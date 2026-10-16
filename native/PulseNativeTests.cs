@@ -30,6 +30,11 @@ static class PulseNativeTests {
     feed.Arguments="-e \"process.stdout.write(Buffer.from('"+encoded+"','base64').toString('utf8'))\"";
     using(Process child=Process.Start(feed)) {string result=child.StandardOutput.ReadToEnd();Check(child.WaitForExit(3000)&&child.ExitCode==0,"UTF8 child fixture must finish");Dictionary<string,object> parsed;Check(FloatingPulse.TryParseSnapshot(result,out parsed)&&Convert.ToString(parsed["title"])==unicode,"Chinese/emoji catalog survives redirected UTF8 round trip");}
     Dictionary<string,object> rejected;Check(!FloatingPulse.TryParseSnapshot("{bad frame",out rejected)&&FloatingPulse.TryParseSnapshot("{\"valid\":true}",out rejected),"bad frame must not poison later valid data");
+    Dictionary<string,object> official=new Dictionary<string,object>{{"exactCounts",true},{"status","live"},{"rate",40.0},{"responseRate",null}};
+    Check(FloatingPulse.OfficialTokenRate(official)==40&&FloatingPulse.OfficialTokenCaption(official)=="官方流区间 TPS","official midstream counters use the interval TPS label");
+    official["status"]="completion-only";official["rate"]=null;official["responseRate"]=25.0;
+    Check(FloatingPulse.OfficialTokenRate(official)==25&&FloatingPulse.OfficialTokenCaption(official)=="本次响应均速","completion-only usage must be labeled as response average");
+    official["status"]="waiting";Check(!FloatingPulse.OfficialTokenRate(official).HasValue,"stale/completed usage is never reused while awaiting token reports");
     PulsePanelState panel=new PulsePanelState(false);panel.UpdateHost(false,0);Check(!panel.PanelVisible&&!panel.LauncherVisible,"closed Codex hides both surfaces");
     panel.UpdateHost(true,12);Check(panel.LauncherVisible&&!panel.PanelVisible,"opening Codex initially presents a launcher without expanding the panel");
     using(PulseLaunchButton button=new PulseLaunchButton()){

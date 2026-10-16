@@ -1,0 +1,42 @@
+{
+  "source": "https://github.com/anthropics/anthropic-sdk-typescript/blob/04a4c28c70de498d6d0e930e43edb5edb9ac545e/tests/lib/fixtures/basic_response.txt",
+  "note": "Reduced event types and numeric usage only. No timing information is supplied by this fixture.",
+  "events": [
+    {
+      "type": "message_start",
+      "message": {
+        "id": "synthetic-response",
+        "usage": {
+          "output_tokens": 1
+        }
+      }
+    },
+    {
+      "type": "content_block_start"
+    },
+    {
+      "type": "content_block_delta"
+    },
+    {
+      "type": "content_block_delta"
+    },
+    {
+      "type": "content_block_delta"
+    },
+    {
+      "type": "content_block_stop"
+    },
+    {
+      "type": "message_delta",
+      "usage": {
+        "output_tokens": 6
+      },
+      "delta": {
+        "stop_reason": "end_turn"
+      }
+    },
+    {
+      "type": "message_stop"
+    }
+  ]
+}

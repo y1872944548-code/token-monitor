@@ -8,7 +8,9 @@ Claude Code 日志监控使用 `npm run start:claude`，Antigravity 使用 `npm 
 npm run claude:stream -- --cwd "C:\你的项目" "介绍这个项目的结构"
 ```
 
-这会调用已安装、已登录的 Claude CLI，以非交互 print 模式执行一次请求，并在 Windows 自动打开该会话的浮条；它不是接管已有交互终端。精确 Token 与 TPS 仍以上报用量为准。新客户端的可用指标、继续会话、Windows 窗口识别和边界见[多客户端说明](docs/CLIENTS.md)。
+这会调用已安装、已登录的 Claude CLI，以非交互 print 模式执行一次请求，并在 Windows 自动打开该会话的浮条；它不是接管已有交互终端。0.11.0 新增“官方流 TPS”：直接读取官方累计 `output_tokens`，用相邻计数增量和本机接收间隔计算。上游只有结束上报时显示“本次响应均速”，生成中尚无 Token 报告时显示等待；没有将字数换算成 Token。
+
+当前验证的 Anthropic 官方普通流示例只有结束用量，因此不能保证逐 Token 的实时分辨率。实时字/秒继续独立提供。新客户端的可用指标、继续会话、Windows 窗口识别和边界见[多客户端说明](docs/CLIENTS.md)。
 
 它通过本机日志和桌面事件读取统计数据，不修改 Codex 客户端。实时采集不需要模型轮询。项目由独立开发者维护，内部桌面事件接口可能随 Codex 升级而变化。
 

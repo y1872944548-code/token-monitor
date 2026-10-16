@@ -16,6 +16,7 @@ async function sample(){if(!enabled)return;if(busy){queued=true;return;}busy=tru
   try{if(pendingScope){const request=pendingScope;pendingScope=null;try{await engine.select(request);}catch(error){engine.controlError=error.message;}}
     await engine.tick();const value=engine.snapshot();value.points=value.points.slice(-250).map(({time,rate})=>({time,rate}));value.reportedPoints=value.reportedPoints.slice(-250).map(({time,rate})=>({time,rate}));delete value.tokenPoints;delete value.sessions;
     if(includeCatalog){value.catalog=engine.catalog.publicList();value.catalogRestricted=engine.catalog.restricted;includeCatalog=false;}
+    if(value.officialPoints)value.officialPoints=value.officialPoints.slice(-250);
     process.stdout.write(JSON.stringify(value)+'\n');
   }catch(error){process.stderr.write('Scope sample failed: '+error.message+'\n');}
   finally{busy=false;if(queued){queued=false;schedule(0);}}
