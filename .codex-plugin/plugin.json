@@ -5,7 +5,7 @@
   "interface": {
     "displayName": "AI 客户端监控浮条",
     "shortDescription": "查看 Token、TPS 和滚动曲线",
-    "longDescription": "可拖动、缩放的 Windows 监控浮条。Codex 支持事件流；Claude Code 支持本机会话日志；Antigravity 提供实验性 SQLite 用量适配。客户端数据与设置独立保存，未知指标明确显示未提供。",
+    "longDescription": "可拖动、缩放的 Windows 监控浮条。Codex 支持事件流；Claude Code 支持本机会话日志，另有显式流式启动入口提供实时字速；Antigravity 提供实验性 SQLite 用量适配。客户端数据与设置独立保存，未知指标明确显示未提供。",
     "developerName": "本机自用",
     "category": "Productivity",
     "brandColor": "#17634F",

@@ -74,6 +74,7 @@ export async function runClaudeStream({ prompt, sessionId = randomUUID(), resume
       if (text) { if (!stdout.write(text)) await new Promise(resolve => stdout.once('drain', resolve)); }
       if (record?.type === 'result' && record.session_id === sessionId) {
         sawResult = true; resultError ||= record.is_error === true;
+        if (record.is_error === true) stderr.write('Claude reported a failed request. Check the CLI login, model availability and tool permissions.\n');
         // Old/non-streaming CLIs may emit only a final result. Display it, but
         // do not count a completed response as live deltas.
         if (!metrics.characters && typeof record.result === 'string') stdout.write(record.result);
@@ -82,6 +83,7 @@ export async function runClaudeStream({ prompt, sessionId = randomUUID(), resume
     const exit = await exited;
     if (exit.error) throw new Error('Could not start Claude CLI: ' + (exit.error.code || 'spawn failed'));
     if (ioError) throw ioError;
+    if (!sawResult && !interrupted && exit.code === 0) stderr.write('Claude stream ended without a final result; the request was not confirmed complete.\n');
     return { code: interrupted ? 130 : exit.code || (exit.signal || resultError || !sawResult ? 1 : 0), sessionId, characters: metrics.characters };
   } finally {
     clearInterval(timer); signal?.removeEventListener('abort', stop);

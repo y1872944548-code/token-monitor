@@ -8,18 +8,23 @@ import { ClientMonitor } from './client-monitor.mjs';
 export async function sampleFloat({ threadId, codexHome, client = clientId(), dataDir = clientDataDir(client), now = Date.now() } = {}) {
   clientId(client);
   if (client !== 'codex') {
-    const monitor = new ClientMonitor({ client, threadId, dataDir, settingsFile: path.join(dataDir, 'monitor-settings.json'), now: () => now });
-    await monitor.initialize();
-    if (threadId) monitor.config = { ...monitor.config, mode: 'thread', threadId };
-    await monitor.tick(); const value = monitor.snapshot(); monitor.close();
     let window = null;
     try {
       const candidate = JSON.parse(await readFile(path.join(dataDir, 'float-status.json'), 'utf8'));
       const age = now - Date.parse(candidate.checkedAt);
       if (candidate.client === client && age >= 0 && age < 5000 && (!threadId || candidate.scope?.mode === 'thread' && candidate.threadId === threadId)) window = candidate;
     } catch {}
+    const monitor = new ClientMonitor({ client, threadId, dataDir, settingsFile: path.join(dataDir, 'monitor-settings.json'), now: () => now });
+    await monitor.initialize();
+    // A streaming launch can temporarily follow a session while the saved
+    // default still points elsewhere. Sample the live scope, including graphs
+    // and capabilities, rather than mixing it with the saved session's data.
+    if (window?.scope && ['thread', 'all'].includes(window.scope.mode)) monitor.config = { ...monitor.config, ...window.scope };
+    if (threadId) monitor.config = { ...monitor.config, mode: 'thread', threadId };
+    await monitor.tick(); const value = monitor.snapshot(); monitor.close();
     return { ...value, presentation: 'desktop-float', window,
-      ...(window ? { selectedId: window.threadId, usage: window.usage, limits: window.limits, observedAt: window.observedAt, ageSeconds: window.dataAgeSeconds, latestRate: window.rate, scope: window.scope, liveOutput: window.liveOutput } : {}) };
+      ...(window ? { selectedId: window.threadId, usage: window.usage, limits: window.limits, observedAt: window.observedAt, ageSeconds: window.dataAgeSeconds, latestRate: window.rate, scope: window.scope,
+        ...(window.liveOutput ? { liveOutput: window.liveOutput } : {}), ...(window.capabilities ? { capabilities: window.capabilities } : {}) } : {}) };
   }
   const catalog = new ThreadCatalog(codexHome ? { home: codexHome } : {});
   await catalog.refresh(true);

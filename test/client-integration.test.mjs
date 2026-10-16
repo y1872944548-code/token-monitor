@@ -23,12 +23,21 @@ async function fixture(t) {
 }
 
 test('stdio MCP selects Claude and Antigravity while default Codex remains isolated', async t => {
-  const { env } = await fixture(t);
+  const { env, root } = await fixture(t);
   const client = new Client({ name: 'multi-client-check', version: '1' }); t.after(() => client.close());
   await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../src/float-mcp.mjs', import.meta.url))], env }));
   const claude = await client.callTool({ name: 'pulse_snapshot', arguments: { client: 'claude-code', threadId: a } });
   assert.ok(!claude.isError); assert.equal(claude.structuredContent.client, 'claude-code'); assert.equal(claude.structuredContent.usage.total_tokens, 110);
   assert.equal(claude.structuredContent.capabilities.visibleCharacters, false);
+  const data = path.join(root, 'data', 'clients', 'claude-code'); await mkdir(data, { recursive: true });
+  await writeFile(path.join(data, 'monitor-settings.json'), JSON.stringify({ mode: 'thread', threadId: a }));
+  await writeFile(path.join(data, 'float-status.json'), JSON.stringify({ client: 'claude-code', checkedAt: new Date().toISOString(), threadId: b,
+    scope: { mode: 'thread', threadId: b, coverage: 'available' }, usage: { total_tokens: 130 }, limits: null, observedAt: Date.now(), dataAgeSeconds: 0, rate: 1,
+    capabilities: { tokens: true, visibleCharacters: true, accountLimits: false }, liveOutput: { connected: true, synchronized: true, rate: 10, unit: 'characters/s' } }));
+  const followed = (await client.callTool({ name: 'pulse_snapshot', arguments: { client: 'claude-code' } })).structuredContent;
+  assert.equal(followed.selectedId, b); assert.equal(followed.capabilities.visibleCharacters, true); assert.equal(followed.liveOutput.rate, 10);
+  const explicit = (await client.callTool({ name: 'pulse_snapshot', arguments: { client: 'claude-code', threadId: a } })).structuredContent;
+  assert.equal(explicit.usage.total_tokens, 110); assert.equal(explicit.capabilities.visibleCharacters, false);
   const antigravity = await client.callTool({ name: 'pulse_snapshot', arguments: { client: 'antigravity' } });
   assert.ok(!antigravity.isError); assert.equal(antigravity.structuredContent.client, 'antigravity'); assert.equal(antigravity.structuredContent.usage, null);
   const codex = await client.callTool({ name: 'pulse_snapshot', arguments: {} });
