@@ -210,6 +210,7 @@ sealed class FloatingPulse : Form {
   }
   internal static string OfficialTokenCaption(Dictionary<string,object> value){string status=Convert.ToString(Field(value,"status"));return status=="live"?"官方流区间 TPS":status=="completed"||status=="completion-only"?"本次响应均速":"官方 Token TPS";}
   internal static string OfficialTokenText(Dictionary<string,object> value){double? rate=OfficialTokenRate(value);if(rate.HasValue)return rate.Value.ToString("0.0",CultureInfo.InvariantCulture)+" TPS";string status=Convert.ToString(Field(value,"status"));return status=="select-session"?"请选择会话":status=="counter-error"?"计数异常":status=="disconnected"||status=="unsupported"?"未连接":"待Token上报";}
+  internal static bool RetainOfficialHost(Dictionary<string,object> value,double now){string status=Convert.ToString(Field(value,"status"));double? observed=Num(Field(value,"observedAt"));return (status=="completed"||status=="completion-only")&&observed.HasValue&&now>=observed.Value&&now-observed.Value<30000;}
   internal static bool IsCodexPath(string value) { return value!=null && (value.IndexOf("\\WindowsApps\\OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)>=0 || (value.IndexOf("\\OpenAI\\Codex\\",StringComparison.OrdinalIgnoreCase)>=0 && value.IndexOf("\\bin\\",StringComparison.OrdinalIgnoreCase)<0)); }
   internal static string ClientLabel(string client){if(client=="codex")return "Codex";if(client=="claude-code")return "Claude Code";if(client=="antigravity")return "Antigravity";throw new ArgumentException("Unsupported client");}
   internal static string RuntimeDirectory(string project){return Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT_DATA_DIR")??Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(project,"runtime");}
@@ -320,7 +321,8 @@ sealed class FloatingPulse : Form {
     Stopwatch elapsed=Stopwatch.StartNew();HostState found=new HostState();
     try {
       IntPtr known=owner;uint knownPid;GetWindowThreadProcessId(known,out knownPid);
-      if(client!="claude-code"&&known!=IntPtr.Zero && IsWindow(known) && ownerProcesses.ContainsKey(knownPid) && clock.Elapsed.TotalSeconds-lastDiscovery<(IsIconic(known)?3:15)) {
+      bool retainedStream=client=="claude-code"&&streamLauncher!=0&&RetainOfficialHost(Obj(Field(state,"officialTokenOutput")),UnixNow());
+      if(known!=IntPtr.Zero && IsWindow(known) && ownerProcesses.ContainsKey(knownPid) && (retainedStream||client!="claude-code"&&clock.Elapsed.TotalSeconds-lastDiscovery<(IsIconic(known)?3:15))) {
         Rect bounds;if(GetWindowRect(known,out bounds)) {found.Handle=known;found.Pid=knownPid;found.Bounds=bounds;found.Visible=IsWindowVisible(known)&&!IsIconic(known);found.Probe="validated client window; minimized companion hides but collection continues";return;}
       }
       lastDiscovery=clock.Elapsed.TotalSeconds;

@@ -79,7 +79,7 @@ Claude 浮条新增“官方流 TPS / 日志 TPS / 字/秒”三个选项。新�
 | `select-session` | 请选择会话 | 官方流 TPS 需要单会话范围 |
 | `disconnected` | 未连接 | 计数流或有效观测过期 |
 
-生成中的增量观测超过 3 秒未更新便恢复等待，不持续把旧 TPS 当作新采样。回复、工具调用或重试切换至新 message ID 后重建基线；完整 assistant/result 消息不再次加入 Token。流计数只服务于速度，不叠加进日志累计。流文件新增的字段仍只有数字、时间与状态，不保存文本。
+生成中的增量观测超过 3 秒未更新便恢复等待，不持续把旧 TPS 当作新采样。回复、工具调用或重试切换至新 message ID 后重建基线；完整 assistant/result 消息不再次加入 Token。流计数只服务于速度，不叠加进日志累计。流文件新增的字段仍只有数字、时间与状态，不保存文本。非交互请求完成、启动器退出后，已验证的终端窗口可保留结束均速最多 30 秒，窗口关闭或观测过期后停止关联。
 
 **精确的是官方计数，时间使用本机收到事件的时间；网络缓冲与事件打包会影响观测区间，不能称为服务端纯生成性能或逐 Token 时间。** 官方 [basic_response 示例](https://github.com/anthropics/anthropic-sdk-typescript/blob/04a4c28c70de498d6d0e930e43edb5edb9ac545e/tests/lib/fixtures/basic_response.txt) 有三个文字增量，但只有起始与结束用量，属于 `completion-only`。本项目将其精简为无正文的事件顺序回归，保证不会因文字持续到达就宣称精确实时 Token 已可用。支持中途 usage 的代码路径已实现并用合成协议测试，但没有真实 Claude 连续计数的验收证据，不能据此承诺官方客户端普遍支持逐 Token 报告。
 

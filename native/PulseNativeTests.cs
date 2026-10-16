@@ -34,6 +34,7 @@ static class PulseNativeTests {
     Check(FloatingPulse.OfficialTokenRate(official)==40&&FloatingPulse.OfficialTokenCaption(official)=="官方流区间 TPS","official midstream counters use the interval TPS label");
     official["status"]="completion-only";official["rate"]=null;official["responseRate"]=25.0;
     Check(FloatingPulse.OfficialTokenRate(official)==25&&FloatingPulse.OfficialTokenCaption(official)=="本次响应均速","completion-only usage must be labeled as response average");
+    official["observedAt"]=100000.0;Check(FloatingPulse.RetainOfficialHost(official,101000)&&!FloatingPulse.RetainOfficialHost(official,131000),"completed stream keeps its validated terminal visible only within the response observation window");
     official["status"]="waiting";Check(!FloatingPulse.OfficialTokenRate(official).HasValue,"stale/completed usage is never reused while awaiting token reports");
     PulsePanelState panel=new PulsePanelState(false);panel.UpdateHost(false,0);Check(!panel.PanelVisible&&!panel.LauncherVisible,"closed Codex hides both surfaces");
     panel.UpdateHost(true,12);Check(panel.LauncherVisible&&!panel.PanelVisible,"opening Codex initially presents a launcher without expanding the panel");
