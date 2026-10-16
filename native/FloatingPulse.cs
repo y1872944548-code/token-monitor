@@ -43,7 +43,7 @@ sealed class FloatingPulse : Form {
   Process feed; Dictionary<string,object> pending, state, view; volatile bool closing; bool fastTimer; int frameQueued, scanBusy; string feedFailure;
   readonly List<ChatChoice> chatChoices=new List<ChatChoice>();int catalogRevision;string lastControlError,lastScopeKey="";PulseSettingsPopup settingsPopup;double settingsClosedAt=-1;string nodePath;
   sealed class ChatChoice {public string Id,Title;public double Modified;public override string ToString(){return (String.IsNullOrWhiteSpace(Title)?"未命名对话":Title)+"  ·  "+Id.Substring(0,8);}}
-  double lastSave=-20, lastPreview=-20, lastDiscovery=-30, dotX, dotY=82, smoothScale=1, dpi=1, zoom=1, fps, fpsSince, scanMs; int painted, animationPeriod=100;string hostProbe="",lastGraphMetric="";
+  double lastSave=-20, lastPreview=-20, lastDiscovery=-30, streamExitAt=-1, dotX, dotY=82, smoothScale=1, dpi=1, zoom=1, fps, fpsSince, scanMs; int painted, animationPeriod=100;string hostProbe="",lastGraphMetric="";
   double Unit { get { return dpi*zoom; } }
   Dictionary<uint,string> ownerProcesses=new Dictionary<uint,string>(); List<double[]> curve=new List<double[]>();
   HashSet<uint> claudeParents=new HashSet<uint>();
@@ -321,12 +321,17 @@ sealed class FloatingPulse : Form {
     Stopwatch elapsed=Stopwatch.StartNew();HostState found=new HostState();
     try {
       IntPtr known=owner;uint knownPid;GetWindowThreadProcessId(known,out knownPid);
-      bool retainedStream=client=="claude-code"&&streamLauncher!=0&&RetainOfficialHost(Obj(Field(state,"officialTokenOutput")),UnixNow());
+      uint launcher=streamLauncher;
+      if(client=="claude-code"&&launcher!=0)try{using(Process process=Process.GetProcessById((int)launcher)){if(process.StartTime.ToUniversalTime().Ticks!=streamLauncherStarted)launcher=0;}}catch{launcher=0;}
+      if(streamLauncher!=0){if(launcher!=0)streamExitAt=-1;else if(streamExitAt<0)streamExitAt=UnixNow();}
+      // Leave enough time for the final 500ms feed sample to arrive after the
+      // CLI exits, then retain only an actual completed token observation.
+      bool retainedStream=client=="claude-code"&&streamLauncher!=0&&(RetainOfficialHost(Obj(Field(state,"officialTokenOutput")),UnixNow())||streamExitAt>=0&&UnixNow()-streamExitAt<3000);
       if(known!=IntPtr.Zero && IsWindow(known) && ownerProcesses.ContainsKey(knownPid) && (retainedStream||client!="claude-code"&&clock.Elapsed.TotalSeconds-lastDiscovery<(IsIconic(known)?3:15))) {
         Rect bounds;if(GetWindowRect(known,out bounds)) {found.Handle=known;found.Pid=knownPid;found.Bounds=bounds;found.Visible=IsWindowVisible(known)&&!IsIconic(known);found.Probe="validated client window; minimized companion hides but collection continues";return;}
       }
       lastDiscovery=clock.Elapsed.TotalSeconds;
-      if(client=="claude-code"&&pinnedHost==0){uint launcher=streamLauncher;if(launcher!=0)try{using(Process process=Process.GetProcessById((int)launcher)){if(process.StartTime.ToUniversalTime().Ticks!=streamLauncherStarted)launcher=0;}}catch{launcher=0;}claudeParents=ClaudeParentProcesses(launcher);}
+      if(client=="claude-code"&&pinnedHost==0)claudeParents=ClaudeParentProcesses(launcher);
       Dictionary<uint,string> valid=new Dictionary<uint,string>();
       foreach(string name in client=="codex"?new string[]{"ChatGPT","Codex"}:client=="antigravity"?new string[]{"Antigravity"}:new string[]{"WindowsTerminal","Code","powershell","pwsh","cmd","OpenConsole","conhost"})foreach(Process p in Process.GetProcessesByName(name)) {
         try { string executable; if(!ownerProcesses.TryGetValue((uint)p.Id,out executable))executable=p.MainModule.FileName;
