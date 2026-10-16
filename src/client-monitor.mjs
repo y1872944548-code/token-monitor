@@ -1,9 +1,10 @@
 import { readdir, stat, open, readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { CLIENTS, clientId, clientHome } from './clients.mjs';
+import { CLIENTS, clientId, clientHome, clientDataDir } from './clients.mjs';
 import { isId, insideRoots } from './thread-catalog.mjs';
 import { parseAntigravityRecord } from './antigravity-record.mjs';
+import { ClaudeLiveReader } from './claude-live.mjs';
 
 const READ = 8 * 1024 * 1024, MAX_FILES = 500, MAX_MESSAGES = 20000;
 const keys = ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens'];
@@ -23,13 +24,14 @@ export function parseClaudeRecord(record, sessionId) {
 }
 
 export class ClientMonitor {
-  constructor({ client, home = clientHome(client), threadId = null, settingsFile, now = Date.now } = {}) {
+  constructor({ client, home = clientHome(client), threadId = null, settingsFile, dataDir = settingsFile ? path.dirname(settingsFile) : clientDataDir(client), now = Date.now } = {}) {
     this.client = clientId(client); if (this.client === 'codex') throw new Error('Use the Codex ScopeEngine');
     this.home = path.resolve(home); this.settingsFile = settingsFile; this.now = now;
     this.config = { mode: 'thread', threadId, globalStartedAt: null };
     this.catalog = { entries: [], restricted: false, publicList: () => this.catalog.entries.map(({ id, modifiedAt }) => ({ id, title: CLIENTS[this.client] + ' · ' + id.slice(0, 8), modifiedAt })) };
     this.files = new Map(); this.lastDiscover = 0; this.readErrors = 0; this.discoveryErrors = 0; this.partial = false; this.enabled = true; this.controlError = null;
     this.points = []; this.messageCount = 0; this.pendingFiles = 0;
+    this.livePoints = []; this.live = client === 'claude-code' ? new ClaudeLiveReader(path.join(dataDir, 'streams'), now) : null;
   }
   async initialize() {
     if (this.settingsFile) try {
@@ -37,7 +39,7 @@ export class ClientMonitor {
       if (['thread', 'all'].includes(saved.mode) && isId(saved.threadId)) this.config = { mode: saved.mode, threadId: saved.threadId, globalStartedAt: Number.isFinite(saved.globalStartedAt) ? saved.globalStartedAt : null };
     } catch (error) { if (error.code !== 'ENOENT') this.controlError = '监控设置不可读，尚未覆盖原文件'; }
     if (this.config.mode === 'all' && !this.config.globalStartedAt) this.config.globalStartedAt = this.now();
-    await this.discover();
+    await this.live?.tick(); await this.discover();
   }
   async discover() {
     this.lastDiscover = this.now(); this.discoveryErrors = 0; this.discoveryPartial = false; this.unsupportedFiles = 0;
@@ -63,6 +65,14 @@ export class ClientMonitor {
     const present = new Set(entries.map(x => x.file)); for (const file of this.files.keys()) if (!present.has(file)) this.files.delete(file);
     this.messageCount = [...this.files.values()].reduce((n, state) => n + state.messages.size, 0);
     if (!isId(this.config.threadId) && entries[0]) this.config.threadId = entries[0].id;
+    this.mergeLiveCatalog();
+  }
+  mergeLiveCatalog() {
+    if (!this.live) return;
+    this.catalog.entries = this.catalog.entries.filter(row => !row.streamOnly);
+    for (const row of this.live.sessions()) if (!this.catalog.entries.some(entry => entry.id === row.id)) this.catalog.entries.push(row);
+    this.catalog.entries.sort((a, b) => b.modifiedAt - a.modifiedAt);
+    if (!isId(this.config.threadId) && this.catalog.entries[0]) this.config.threadId = this.catalog.entries[0].id;
   }
   async persist(next) {
     if (!this.settingsFile) return;
@@ -73,7 +83,7 @@ export class ClientMonitor {
     await this.discover();
     if (!['thread', 'all'].includes(mode) || !isId(threadId) || (mode === 'thread' && !this.catalog.entries.some(x => x.id === threadId))) throw new Error('未找到所选客户端的会话');
     const next = { mode, threadId, globalStartedAt: mode === 'all' && (resetGlobal || !this.config.globalStartedAt) ? this.now() : this.config.globalStartedAt };
-    await this.persist(next); this.config = next; this.points = []; this.controlError = null;
+    await this.persist(next); this.config = next; this.points = []; this.livePoints = []; this.controlError = null;
   }
   accept(state, record) {
     if (!record) return;
@@ -142,9 +152,10 @@ export class ClientMonitor {
   }
   async tick() {
     if (!this.enabled) return;
+    await this.live?.tick(); this.mergeLiveCatalog();
     if (this.now() - this.lastDiscover > 3000) await this.discover();
     this.readErrors = 0;
-    const selected = this.config.mode === 'thread' ? this.catalog.entries.filter(x => x.id === this.config.threadId) : this.catalog.entries;
+    const selected = this.catalog.entries.filter(x => x.file && (this.config.mode !== 'thread' || x.id === this.config.threadId));
     const begin = (this.scanOffset || 0) % (selected.length || 1), work = [...selected.slice(begin), ...selected.slice(0, begin)];
     this.pendingFiles = 0;
     const deadline = Date.now() + 1500;
@@ -178,16 +189,23 @@ export class ClientMonitor {
     const observedAt = rows.length ? Math.max(...rows.map(x => x.time)) : null;
     const latestRate = known && usage?.total_tokens !== null ? rows.filter(x => x.time > now - 120000).reduce((sum, x) => sum + x.usage.output_tokens, 0) / 120 : null;
     if (latestRate !== null && (!this.points.length || now - this.points.at(-1).time >= 500)) { this.points.push({ time: now, rate: latestRate }); if (this.points.length > 250) this.points.shift(); }
-    const error = !this.catalog.entries.length ? this.unsupportedFiles ? '当前记录格式未支持' : '等待本机会话' : !known ? '尚无兼容用量' : partial ? '用量不完整' : null;
-    return { kind: 'codex-pulse', version: '0.9.0', client: this.client, clientLabel: CLIENTS[this.client], now,
+    const liveOutput = this.live?.snapshot(this.config), liveReady = liveOutput?.connected && liveOutput.synchronized;
+    if (liveReady || this.livePoints.length) {
+      this.livePoints.push({ time: now, rate: liveReady ? liveOutput.rate : 0 });
+      this.livePoints = this.livePoints.filter(row => row.time > now - 120000).slice(-250);
+    }
+    const error = liveReady && !known ? null : !this.catalog.entries.length ? this.unsupportedFiles ? '当前记录格式未支持' : '等待本机会话' : !known ? '尚无兼容用量' : partial ? '用量不完整' : null;
+    return { kind: 'codex-pulse', version: '0.10.0', client: this.client, clientLabel: CLIENTS[this.client], now,
       selectedId: this.config.mode === 'all' ? null : this.config.threadId, usage, limits: null, observedAt,
       ageSeconds: observedAt === null ? null : Math.max(0, (now - observedAt) / 1000), latestRate, rateIntervalSeconds: 120,
-      points: this.points, reportedPoints: this.points, chartMetric: 'reported-output-tokens-per-second',
-      sourceLabel: '本机记录 · 120s 上报均速', capabilities: { tokens: known, visibleCharacters: false, accountLimits: false, experimental: this.client === 'antigravity', unsupportedFiles: this.unsupportedFiles },
-      status: 'unknown', lastActivity: observedAt, error, controlError: this.controlError,
+      points: liveReady ? this.livePoints : this.points, reportedPoints: this.points, chartMetric: liveReady ? 'visible-characters-per-second' : 'reported-output-tokens-per-second',
+      ...(liveOutput ? { liveOutput } : {}),
+      sourceLabel: liveReady ? 'Claude stream-json · 实时字/s' : '本机记录 · 120s 上报均速', capabilities: { tokens: known, visibleCharacters: !!liveReady, accountLimits: false, experimental: this.client === 'antigravity', unsupportedFiles: this.unsupportedFiles },
+      status: liveReady ? 'running' : 'unknown', lastActivity: Math.max(observedAt || 0, liveOutput?.lastTextAt || 0) || null, error, controlError: this.controlError,
       scope: { ...this.config, startedAt: this.config.globalStartedAt, client: this.client, indexAvailable: true,
         readErrors: this.readErrors + this.discoveryErrors, missingDetails: partial ? 1 : 0, loading: this.pendingFiles, catalogThreads: this.catalog.entries.length,
-        coverage: partial ? 'partial' : known ? 'available' : 'unavailable', connectedStreams: 0 } };
+        coverage: partial ? 'partial' : known ? 'available' : 'unavailable', connectedStreams: liveOutput?.connectedStreams || 0,
+        streamReadErrors: liveOutput?.readErrors || 0, streamCoverage: liveOutput?.partial ? 'partial' : liveReady ? 'available' : 'unavailable' } };
   }
   pause() { this.enabled = false; }
   resume() { this.enabled = true; this.lastDiscover = 0; }

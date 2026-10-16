@@ -62,8 +62,8 @@ sealed class FloatingPulse : Form {
   protected override bool ShowWithoutActivation { get { return true; } }
   protected override void SetVisibleCore(bool value) { base.SetVisibleCore(value && codexVisible); }
   protected override CreateParams CreateParams { get { CreateParams p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x80; return p; } }
-  public FloatingPulse(string projectRoot, string node, string threadId,bool showOnStart=false) {
-    client=Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT")??"codex";clientLabel=ClientLabel(client);UInt32.TryParse(Environment.GetEnvironmentVariable("CODEX_PULSE_HOST_PID"),out pinnedHost);
+  public FloatingPulse(string projectRoot, string node, string threadId,bool showOnStart=false,bool followThread=false) {
+    client=Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT")??"codex";clientLabel=ClientLabel(client);if(client=="claude-code")speedMetric="characters";UInt32.TryParse(Environment.GetEnvironmentVariable("CODEX_PULSE_HOST_PID"),out pinnedHost);
     data=Environment.GetEnvironmentVariable("CODEX_PULSE_CLIENT_DATA_DIR")??Environment.GetEnvironmentVariable("CODEX_PULSE_DATA_DIR")??Path.Combine(projectRoot,"runtime");Directory.CreateDirectory(data);
     showRequest=new System.Threading.EventWaitHandle(false,System.Threading.EventResetMode.AutoReset,InstanceName(data)+"-show");
     panel=new PulsePanelState(showOnStart);launcher=new PulseLaunchButton();
@@ -80,7 +80,7 @@ sealed class FloatingPulse : Form {
       Dictionary<string,object> saved=(Dictionary<string,object>)json.DeserializeObject(File.ReadAllText(layout));
       double? savedZoom=Num(Field(saved,"zoom")); if(savedZoom.HasValue) { zoom=ClampZoom(savedZoom.Value); ApplyDpi((uint)Math.Round(dpi*96)); }
       if(Field(saved,"motion") is bool) motion=(bool)saved["motion"];
-      if(Convert.ToString(Field(saved,"speedMetric"))=="characters")speedMetric="characters";
+      string savedMetric=Convert.ToString(Field(saved,"speedMetric"));if(savedMetric=="characters"||savedMetric=="reported-tps")speedMetric=savedMetric;
       launcher.SetDock(Convert.ToString(Field(saved,"launcherSide")),Num(Field(saved,"launcherOffset"))??.35);
       Point p=new Point(Convert.ToInt32(saved["left"]),Convert.ToInt32(saved["top"]));
       Rectangle screen=Screen.GetWorkingArea(p); Location=new Point(Math.Max(screen.Left,Math.Min(screen.Right-Width,p.X)),Math.Max(screen.Top,Math.Min(screen.Bottom-Height,p.Y)));
@@ -109,7 +109,7 @@ sealed class FloatingPulse : Form {
     MouseUp += delegate(object sender,MouseEventArgs e) { dragged=false;resizing=false;Capture=false;SaveLayout();SaveEvidence();if(e.Button==MouseButtons.Right)ShowSettings(); };
 
     try {
-      ProcessStartInfo start=CreateFeedStartInfo(root,node,thread);
+      ProcessStartInfo start=CreateFeedStartInfo(root,node,thread,followThread);
       feed=Process.Start(start); feed.ErrorDataReceived += delegate(object sender,DataReceivedEventArgs e) { if(e.Data!=null) LogError(e.Data); }; feed.BeginErrorReadLine();
       System.Threading.Tasks.Task.Factory.StartNew(delegate {
         try { while(!closing) { string line=feed.StandardOutput.ReadLine(); if(line==null) { if(!closing) lock(gate) feedFailure="数据源已停止"; break; }
@@ -150,8 +150,8 @@ sealed class FloatingPulse : Form {
     FormClosed += delegate { closing=true;showRequest.Dispose();launcher.Dispose();if(settingsPopup!=null)settingsPopup.Close(); tick.Stop(); animator.Dispose();presenceTimer.Dispose(); if(fastTimer)timeEndPeriod(1); if(feed!=null) { try { if(!feed.HasExited) feed.Kill(); } catch {} feed.Dispose(); } regular.Dispose();small.Dispose();settingsFont.Dispose();tip.Dispose(); };
   }
   static string Quote(string value) { return "\""+value.Replace("\"","\\\"")+"\""; }
-  internal static ProcessStartInfo CreateFeedStartInfo(string project,string node,string id) {
-    ProcessStartInfo start=new ProcessStartInfo(node,Quote(Path.Combine(project,"src","float-feed.mjs"))+" --thread "+id);
+  internal static ProcessStartInfo CreateFeedStartInfo(string project,string node,string id,bool followThread=false) {
+    ProcessStartInfo start=new ProcessStartInfo(node,Quote(Path.Combine(project,"src","float-feed.mjs"))+" --thread "+id+(followThread?" --follow-thread":""));
     start.UseShellExecute=false;start.CreateNoWindow=true;start.RedirectStandardOutput=true;start.RedirectStandardError=true;start.RedirectStandardInput=true;start.WorkingDirectory=project;
     start.StandardOutputEncoding=System.Text.Encoding.UTF8;start.StandardErrorEncoding=System.Text.Encoding.UTF8;return start;
   }
@@ -265,7 +265,7 @@ sealed class FloatingPulse : Form {
   void ShowMetricInfo(){
     using(Form dialog=new Form()){
       dialog.Text="监控说明";dialog.ClientSize=new Size(460,300);dialog.FormBorderStyle=FormBorderStyle.FixedDialog;dialog.StartPosition=FormStartPosition.CenterScreen;dialog.MaximizeBox=false;dialog.MinimizeBox=false;dialog.ShowInTaskbar=false;
-      TextBox info=new TextBox();info.Multiline=true;info.ReadOnly=true;info.BorderStyle=BorderStyle.None;info.ScrollBars=ScrollBars.Vertical;info.TabStop=false;info.SetBounds(20,20,420,225);info.Text="TPS：官方输出 Token 增量 ÷ 观测秒数，可能含推理。属于上报均速，无法精确逐 Token 实时测量。\r\n\r\n字/秒：最近 2 秒收到的可见文字，不含推理和工具执行。\r\n\r\n范围：可选单个对话或本机全局；Token、速度和曲线共同切换。\r\n\r\n操作：拖主体移动，拖右下角缩放。最小化同步隐藏，后台继续采集。\r\n\r\n重新打开：移到 Codex 窗口边缘的标签，再点展开的“监控”按钮。关闭浮条后入口仍保留。";if(client!="codex")info.Text=clientLabel+"：读取本机用量记录。TPS 为最近120秒已上报输出Token/120，含等待时间，不代表瞬时模型速度。\r\n\r\n当前未提供逐字速度和账户额度；未知数据保持空缺。\r\n\r\nClaude Code：Windows 本机会话日志；在终端或 VS Code 使用。窗口无法自动识别时可用 HostPid 指定。\r\n\r\nAntigravity：实验性 SQLite 记录适配；格式不兼容时显示等待或未识别。\r\n\r\n每个客户端的设置与统计起点独立保存。";dialog.Controls.Add(info);
+      TextBox info=new TextBox();info.Multiline=true;info.ReadOnly=true;info.BorderStyle=BorderStyle.None;info.ScrollBars=ScrollBars.Vertical;info.TabStop=false;info.SetBounds(20,20,420,225);info.Text="TPS：官方输出 Token 增量 ÷ 观测秒数，可能含推理。属于上报均速，无法精确逐 Token 实时测量。\r\n\r\n字/秒：最近 2 秒收到的可见文字，不含推理和工具执行。\r\n\r\n范围：可选单个对话或本机全局；Token、速度和曲线共同切换。\r\n\r\n操作：拖主体移动，拖右下角缩放。最小化同步隐藏，后台继续采集。\r\n\r\n重新打开：移到 Codex 窗口边缘的标签，再点展开的“监控”按钮。关闭浮条后入口仍保留。";if(client!="codex")info.Text=clientLabel+"：读取本机用量记录。TPS 为最近120秒已上报输出Token/120，含等待时间，不代表瞬时模型速度。\r\n\r\nClaude 使用 claude:stream 启动时支持实时字/秒；Token 仍以上报为准，不提供账户额度。\r\n\r\nClaude Code：Windows 本机会话日志；在终端或 VS Code 使用。窗口无法自动识别时可用 HostPid 指定。\r\n\r\nAntigravity：实验性 SQLite 记录适配；格式不兼容时显示等待或未识别。\r\n\r\n每个客户端的设置与统计起点独立保存。";dialog.Controls.Add(info);
       Button close=new Button();close.Text="知道了";close.SetBounds(340,255,100,30);close.DialogResult=DialogResult.Cancel;dialog.Controls.Add(close);dialog.AcceptButton=close;dialog.CancelButton=close;ThemeDialog(dialog);dialog.ShowDialog(this);
     }
   }
@@ -278,7 +278,7 @@ sealed class FloatingPulse : Form {
       RadioButton all=new RadioButton();all.Text="整个 "+clientLabel+"（本次新上报用量）";all.SetBounds(18,45,560,24);dialog.Controls.Add(all);
       Dictionary<string,object> current=Obj(Field(state,"scope"));string selectedId=Convert.ToString(Field(current,"threadId"));if(String.IsNullOrEmpty(selectedId))selectedId=thread;
       all.Checked=Convert.ToString(Field(current,"mode"))=="all";single.Checked=!all.Checked;
-      Label info=new Label();info.Text=client=="codex"?"全局统计从开启时刻起新上报的用量；账户额度不相加。文字速度为可连接对话的合计，连接数量会显示在浮条中。":"只统计当前客户端的本机记录；TPS 为最近120秒上报输出/120，不提供逐字速度或账户额度。会话列表按ID显示，不读取标题正文。";info.SetBounds(20,78,560,38);dialog.Controls.Add(info);
+      Label info=new Label();info.Text=client=="codex"?"全局统计从开启时刻起新上报的用量；账户额度不相加。文字速度为可连接对话的合计，连接数量会显示在浮条中。":"只统计当前客户端；TPS 为最近120秒上报输出/120。Claude 流式启动另提供字/秒，不提供账户额度。会话列表按ID显示，不读取标题正文。";info.SetBounds(20,78,560,38);dialog.Controls.Add(info);
       TextBox search=new TextBox();search.SetBounds(20,124,455,25);dialog.Controls.Add(search);
       Button refresh=new Button();refresh.Text="刷新列表";refresh.SetBounds(485,122,95,28);refresh.Click+=delegate {SendControl("list");};dialog.Controls.Add(refresh);
       ListBox list=new ListBox();list.SetBounds(20,158,560,218);dialog.Controls.Add(list);
@@ -359,7 +359,7 @@ sealed class FloatingPulse : Form {
     Dictionary<string,object> live=Obj(Field(view,"liveOutput"));bool liveReady=DisplayChartMetric()=="visible-characters-per-second";
     double? rate=Num(Field(view,"latestRate")),visibleRate=Num(Field(live,"rate")); string speed=liveReady&&visibleRate.HasValue?visibleRate.Value.ToString("0.0",CultureInfo.InvariantCulture)+" 字/s":fresh&&rate.HasValue ? rate.Value.ToString("0.0",CultureInfo.InvariantCulture)+" TPS" : "待上报";
     WriteText(g,liveReady?"实时可见输出":"输出 TPS · 上报均速",157,7,muted,small); WriteText(g,speed,157,24,liveReady||fresh?mint:muted,regular);
-    WriteText(g,client=="codex"?"5h 剩余":"实时字速",308,7,muted,small); WriteText(g,client=="codex"?Remaining(limits,"primary"):"未提供",308,24,Color.White,regular);
+    WriteText(g,client=="codex"?"5h 剩余":"实时字速",308,7,muted,small); WriteText(g,client=="codex"?Remaining(limits,"primary"):Convert.ToBoolean(Field(live,"connected")??false)&&visibleRate.HasValue?visibleRate.Value.ToString("0.0",CultureInfo.InvariantCulture)+" 字/s":"未连接",308,24,Color.White,regular);
     WriteText(g,client=="codex"?"周剩余":"账户额度",423,7,muted,small); WriteText(g,client=="codex"?Remaining(limits,"secondary"):"未提供",423,24,Color.White,regular);
     WriteText(g,paused?"▶":"Ⅱ",555,17,muted,regular); WriteText(g,"×",584,17,muted,regular);
     DrawSettingsButton(g,Unit,settingsHovered,settingsFont);
@@ -427,8 +427,8 @@ sealed class FloatingPulse : Form {
     if(points.Count==0) WriteText(g,"等待新的用量记录",205,74,muted,small);
     bool liveReady=DisplayChartMetric()=="visible-characters-per-second";
     Dictionary<string,object> scope=Obj(Field(view,"scope"));bool all=Convert.ToString(Field(scope,"mode"))=="all";string connection=all?"全局 "+Convert.ToString(Field(scope,"connectedStreams"))+"路"+(Convert.ToString(Field(scope,"discovering"))=="True"?" 发现中":(Num(Field(scope,"unavailableStreams"))??0)>0?" 部分":"")+" · 字/s":"本机事件流 · 字/s";
-    double? age=DataAge(); WriteText(g,client!="codex"?clientLabel+" · 120s 上报 TPS":liveReady?connection:all?"全局 · 上报 TPS（120s窗口）":speedMetric=="characters"?"文字流断开 · 回退上报 TPS":"输出 TPS · 上报区间均速",14,48,muted,small); WriteText(g,error??(age.HasValue?"用量 "+age.Value.ToString("0")+"s前":"等候回报"),477,48,muted,small);
-    if(liveReady) {double? reported=Num(Field(view,"latestRate"));WriteText(g,age.HasValue&&age.Value<=15&&reported.HasValue?"上报区间 "+reported.Value.ToString("0.0",CultureInfo.InvariantCulture)+" tok/s":"上报区间：待更新",205,48,muted,small);}
+    double? age=DataAge(); WriteText(g,client!="codex"?clientLabel+(liveReady?" · 实时字/s":speedMetric=="characters"?" · 文字流未连接，回退 TPS":" · 120s 上报 TPS"):liveReady?connection:all?"全局 · 上报 TPS（120s窗口）":speedMetric=="characters"?"文字流断开 · 回退上报 TPS":"输出 TPS · 上报区间均速",14,48,muted,small); WriteText(g,error??(age.HasValue?"用量 "+age.Value.ToString("0")+"s前":"等候回报"),477,48,muted,small);
+    if(liveReady) {double? reported=Num(Field(view,"latestRate"));WriteText(g,age.HasValue&&age.Value<=15&&reported.HasValue?(client=="codex"?"上报区间 ":"120s均速 ")+reported.Value.ToString("0.0",CultureInfo.InvariantCulture)+" tok/s":"上报区间：待更新",205,48,muted,small);}
   }
   void SaveEvidence() {SaveEvidence(true);}
   void SaveEvidence(bool capture) {
@@ -442,7 +442,7 @@ sealed class FloatingPulse : Form {
       report["actualOwnerHandle"]=GetWindow(Handle,4).ToInt64();
       report["dpiScale"]=dpi;report["zoom"]=zoom;report["motion"]=motion;report["hostReady"]=hostReady;report["hostPid"]=hostPid;report["hostScanMs"]=scanMs;report["hostProbe"]=hostProbe;report["feedSuspended"]=feedSuspended; report["renderFps"]=fps;
       double? observed=Num(Field(state,"observedAt"));
-      report["version"]="0.9.0";report["client"]=client;report["clientLabel"]=clientLabel;report["capabilities"]=Field(state,"capabilities");report["fastAnimation"]=fastTimer;report["observedAt"]=observed;report["dataAgeSeconds"]=observed.HasValue?(object)Math.Max(0,((DateTime.UtcNow-new DateTime(1970,1,1)).TotalMilliseconds-observed.Value)/1000):null;report["lastActivity"]=Field(state,"lastActivity");
+      report["version"]="0.10.0";report["client"]=client;report["clientLabel"]=clientLabel;report["capabilities"]=Field(state,"capabilities");report["fastAnimation"]=fastTimer;report["observedAt"]=observed;report["dataAgeSeconds"]=observed.HasValue?(object)Math.Max(0,((DateTime.UtcNow-new DateTime(1970,1,1)).TotalMilliseconds-observed.Value)/1000):null;report["lastActivity"]=Field(state,"lastActivity");
       report["placement"]= "codex-window-layer";report["topMost"]=TopMost;report["nativeTopMost"]=IsNativeTopMost(Handle);report["layerAligned"]=layerAligned;
       report["threadId"]=Field(state,"selectedId");report["launchThreadId"]=thread;report["scope"]=Field(state,"scope");report["catalogCount"]=chatChoices.Count;report["usage"]=Field(state,"usage");report["limits"]=Field(state,"limits"); report["checkedAt"]=DateTime.UtcNow.ToString("o"); report["error"]=error;
       report["totalTokens"]=Field(Obj(Field(state,"usage")),"total_tokens"); report["rate"]=Field(state,"latestRate");
@@ -460,15 +460,15 @@ sealed class FloatingPulse : Form {
     } catch {}
   }
   [STAThread] static void Main(string[] args) {
-    if(args.Length!=3&&args.Length!=4) return;if(args.Length==4&&args[3]!="--show")return; Guid id; if(!Guid.TryParse(args[2],out id)) return;
+    if(args.Length<3||args.Length>5)return;bool show=false,follow=false;for(int i=3;i<args.Length;i++){if(args[i]=="--show")show=true;else if(args[i]=="--follow-thread")follow=true;else return;} Guid id; if(!Guid.TryParse(args[2],out id)) return;
     try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { SetProcessDPIAware(); }
     Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
     Application.ThreadException += delegate(object sender,System.Threading.ThreadExceptionEventArgs e) { File.AppendAllText(Path.Combine(RuntimeDirectory(args[0]),"float-error.log"),DateTime.UtcNow.ToString("o")+" "+e.Exception.ToString()+Environment.NewLine); };
     AppDomain.CurrentDomain.UnhandledException += delegate(object sender,UnhandledExceptionEventArgs e) { File.AppendAllText(Path.Combine(RuntimeDirectory(args[0]),"float-error.log"),DateTime.UtcNow.ToString("o")+" "+Convert.ToString(e.ExceptionObject)+Environment.NewLine); };
     using(System.Threading.Mutex singleton=new System.Threading.Mutex(false,InstanceName(RuntimeDirectory(args[0])))) {
       bool acquired=false;try {acquired=singleton.WaitOne(0,false);}catch(System.Threading.AbandonedMutexException){acquired=true;}
-      if(!acquired){if(args.Length==4)try{using(var request=System.Threading.EventWaitHandle.OpenExisting(InstanceName(RuntimeDirectory(args[0]))+"-show"))request.Set();}catch{}return;}
-      try {Application.Run(new FloatingPulse(args[0],args[1],args[2],args.Length==4));}finally {singleton.ReleaseMutex();}
+      if(!acquired){if(show)try{using(var request=System.Threading.EventWaitHandle.OpenExisting(InstanceName(RuntimeDirectory(args[0]))+"-show"))request.Set();}catch{}return;}
+      try {Application.Run(new FloatingPulse(args[0],args[1],args[2],show,follow));}finally {singleton.ReleaseMutex();}
     }
   }
 }

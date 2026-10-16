@@ -29,7 +29,7 @@ static class PortableLauncher {
           }
           JavaScriptSerializer json=new JavaScriptSerializer();Dictionary<string,object> result=json.DeserializeObject(output) as Dictionary<string,object>;Guid id;
           if(result==null||!result.ContainsKey("threadId")||!Guid.TryParse(Convert.ToString(result["threadId"]),out id))throw new Exception("本机初始化没有返回有效标识。");
-          result["launcherVersion"]="0.9.0";result["checkedAt"]=DateTime.UtcNow.ToString("o");File.WriteAllText(Path.Combine(data,"launch-check.json"),json.Serialize(result),Encoding.UTF8);
+          result["launcherVersion"]="0.10.0";result["checkedAt"]=DateTime.UtcNow.ToString("o");File.WriteAllText(Path.Combine(data,"launch-check.json"),json.Serialize(result),Encoding.UTF8);
           if(check)return 0;
           ProcessStartInfo run=new ProcessStartInfo(monitor,Quote(app)+" "+Quote(node)+" "+id.ToString()+(Array.IndexOf(args,"--show")>=0?" --show":""));run.UseShellExecute=false;run.WorkingDirectory=app;
           run.EnvironmentVariables["CODEX_PULSE_DATA_DIR"]=data;run.EnvironmentVariables["CODEX_PULSE_LAUNCHER_PATH"]=Path.Combine(install,"CodexPulseLauncher.exe");run.EnvironmentVariables["NODE_NO_WARNINGS"]="1";

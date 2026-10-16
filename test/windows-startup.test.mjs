@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
+import { writeStreamState } from '../src/claude-live.mjs';
 const exec = promisify(execFile);
 
 test('Windows launch script starts isolated Claude/Antigravity monitors and follows a test host minimize/restore', { skip: process.platform !== 'win32' || process.env.CODEX_PULSE_RUN_NATIVE_STARTUP_TESTS !== '1', timeout: 90000 }, async t => {
@@ -44,9 +45,11 @@ timer.Start();Application.Run(form);}}}`);
       const host = spawn(hostExe, [control], { windowsHide: false, stdio: 'ignore' }); hosts.push(host);
       await wait(async () => (await readFile(control + '.ready', 'utf8').catch(() => '')) === 'ready');
       const data = path.join(root, client); await mkdir(data);
-      await writeFile(path.join(data, 'monitor-settings.json'), JSON.stringify({ mode: 'thread', threadId: session, globalStartedAt: null }));
+      const savedId = client === 'claude-code' ? '22222222-2222-4222-8222-222222222222' : session;
+      await writeFile(path.join(data, 'monitor-settings.json'), JSON.stringify({ mode: 'thread', threadId: savedId, globalStartedAt: null }));
       const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(project, 'scripts', 'start-float.ps1'), '-Client', client,
         '-NodePath', process.execPath, '-HostPid', String(host.pid), '-DataDirectory', data];
+      if (client === 'claude-code') args.push('-ThreadId', session, '-FollowThread');
       await exec('powershell.exe', args, { env, windowsHide: true, timeout: 30000 });
       await wait(async () => { const value = await state(data); return value?.client === client && value.hostPid === host.pid && value.visible && value.scope; });
       const value = await state(data); monitors.push({ pid: value.pid, exe: path.join(project, 'runtime', 'clients', client, 'CodexPulse.exe') });
@@ -55,6 +58,20 @@ timer.Start();Application.Run(form);}}}`);
       if (client === 'claude-code') {
         await writeFile(control, 'minimize'); await wait(async () => { const value = await state(data); return value?.ownerMinimized && !value.visible && !value.feedSuspended; });
         await writeFile(control, 'restore'); await wait(async () => (await state(data))?.visible);
+        let writing = Promise.resolve();
+        const publish = ended => {
+          const now = Date.now();
+          writing = writing.then(() => writeStreamState(path.join(data, 'streams'), { format: 1, client, sessionId: session, updatedAt: now, ended,
+            characters: 20, lastTextAt: ended ? now - 3000 : now, buckets: ended ? [] : [{ time: Math.floor(now / 100) * 100, count: 20 }] }));
+          return writing;
+        };
+        await publish(false); const heartbeat = setInterval(() => { void publish(false); }, 200);
+        try {
+          await wait(async () => { const value = await state(data); return value?.liveOutput?.connected && value.chartMetric === 'visible-characters-per-second' && value.displayedRate === 10; });
+          assert.equal((await state(data)).usage.total_tokens, 120, 'stream characters must not inflate official tokens');
+        } finally { clearInterval(heartbeat); await writing; await publish(true); }
+        await wait(async () => (await state(data))?.chartMetric === 'reported-output-tokens-per-second');
+        assert.equal(JSON.parse(await readFile(path.join(data, 'monitor-settings.json'), 'utf8')).threadId, savedId, 'stream launch preserves saved scope');
       }
       // Reopening this client must reuse its own instance and leave the other one alive.
       await exec('powershell.exe', args, { env, windowsHide: true, timeout: 30000 }); assert.equal((await state(data)).pid, value.pid);

@@ -9,6 +9,7 @@ for (const client of ['claude-code', 'antigravity']) {
     await monitor.initialize(); await monitor.tick(); const value = monitor.snapshot();
     clients.push({ client, localSessions: monitor.catalog.entries.length, compatibleUsageFound: value.capabilities.tokens,
       coverage: value.scope.coverage, readErrors: value.scope.readErrors, unsupportedFiles: value.capabilities.unsupportedFiles,
+      liveTextConnected: value.liveOutput?.connected || false, streamCoverage: value.scope.streamCoverage, streamReadErrors: value.scope.streamReadErrors,
       supportedFormat: client === 'claude-code' ? 'projects/<project>/<session>.jsonl' : 'gen_metadata SQLite with embedded generation timestamp' });
   } finally { monitor.close(); }
 }

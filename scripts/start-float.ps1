@@ -1,4 +1,4 @@
-﻿param([string]$ThreadId = '', [switch]$EnableCompanion, [switch]$ButtonOnly, [string]$NodePath = '', [ValidateSet('codex','claude-code','antigravity')][string]$Client = 'codex', [uint32]$HostPid = 0, [string]$DataDirectory = '')
+﻿param([string]$ThreadId = '', [switch]$EnableCompanion, [switch]$ButtonOnly, [string]$NodePath = '', [ValidateSet('codex','claude-code','antigravity')][string]$Client = 'codex', [uint32]$HostPid = 0, [string]$DataDirectory = '', [switch]$FollowThread)
 $ErrorActionPreference = 'Stop'
 $pulseRoot = Split-Path -Parent $PSScriptRoot
 $pulseBase = if ($env:CODEX_PULSE_DATA_DIR) { $env:CODEX_PULSE_DATA_DIR } else { Join-Path $pulseRoot 'runtime' }
@@ -37,7 +37,7 @@ foreach ($pulseProcess in @(Get-Process -Name 'CodexPulse' -ErrorAction Silently
   $pulseCollapse = $ButtonOnly -and $pulseExisting -and $pulseExisting.panelExpanded
   $pulseNeedExpand = !$ButtonOnly -and $pulseExisting -and ($pulseExisting.PSObject.Properties.Name -contains 'panelExpanded') -and !$pulseExisting.panelExpanded
   $pulseDismissed = $pulseExisting -and $pulseExisting.hostReady -and !$pulseExisting.visible -and !$pulseExisting.ownerMinimized
-  if ($pulseExisting -and $pulseExisting.pid -eq $pulseProcess.Id -and $pulseExisting.pinnedHostPid -eq $HostPid -and ($pulseExisting.threadId -eq $ThreadId -or $pulseExisting.launchThreadId -eq $ThreadId) -and !$pulseNeedsBuild -and !$EnableCompanion -and (!$pulseDismissed -or $ButtonOnly) -and !$pulseCollapse -and !$pulseNeedExpand) { Write-Output 'Client monitor is already running'; exit 0 }
+  if ($pulseExisting -and $pulseExisting.pid -eq $pulseProcess.Id -and $pulseExisting.pinnedHostPid -eq $HostPid -and (!$FollowThread -or ($pulseExisting.scope.mode -eq 'thread' -and $pulseExisting.threadId -eq $ThreadId)) -and ($pulseExisting.threadId -eq $ThreadId -or $pulseExisting.launchThreadId -eq $ThreadId) -and !$pulseNeedsBuild -and !$EnableCompanion -and (!$pulseDismissed -or $ButtonOnly) -and !$pulseCollapse -and !$pulseNeedExpand) { Write-Output 'Client monitor is already running'; exit 0 }
   Stop-Process -Id $pulseProcess.Id
   $pulseProcess.WaitForExit(1500) | Out-Null
 }
@@ -60,6 +60,7 @@ if ($EnableCompanion) {
 }
 $pulseArguments = @(('"{0}"' -f $pulseRoot), ('"{0}"' -f $pulseNode), $ThreadId)
 if (!$ButtonOnly) { $pulseArguments += '--show' }
+if ($FollowThread) { $pulseArguments += '--follow-thread' }
 $pulseStarted = Start-Process -FilePath $pulseExe -ArgumentList $pulseArguments -WorkingDirectory $pulseRoot -PassThru
 $pulseReady = $false
 for ($pulseReadyAttempt=0; $pulseReadyAttempt -lt 100; $pulseReadyAttempt++) {

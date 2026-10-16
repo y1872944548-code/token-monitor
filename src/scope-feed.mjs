@@ -9,6 +9,9 @@ const settingsFile=clientSettingsFile(client);
 let busy=false,queued=false,scheduled,enabled=true,pendingScope,includeCatalog=true;
 function schedule(delay=50){if(!enabled||scheduled)return;scheduled=setTimeout(()=>{scheduled=null;void sample();},delay);}
 const engine=client==='codex'?new ScopeEngine({threadId:id,settingsFile,onChange:()=>schedule(100)}):new ClientMonitor({client,threadId:id,settingsFile});await engine.initialize();
+// Explicit streaming launches follow this session without replacing the saved
+// default scope. User scope changes during the run still persist normally.
+if(client==='claude-code'&&process.argv.includes('--follow-thread'))engine.config={...engine.config,mode:'thread',threadId:id};
 async function sample(){if(!enabled)return;if(busy){queued=true;return;}busy=true;
   try{if(pendingScope){const request=pendingScope;pendingScope=null;try{await engine.select(request);}catch(error){engine.controlError=error.message;}}
     await engine.tick();const value=engine.snapshot();value.points=value.points.slice(-250).map(({time,rate})=>({time,rate}));value.reportedPoints=value.reportedPoints.slice(-250).map(({time,rate})=>({time,rate}));delete value.tokenPoints;delete value.sessions;
